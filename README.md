@@ -56,12 +56,18 @@ npm run inspect
 ### Option A: npm
 
 ```bash
-npx -y limesurvey-mcp-server@1.3.0
+npx -y limesurvey-mcp-server@latest
 ```
 
 The server uses stdio by default. Supply credentials through the MCP client
-configuration shown below. Pin a version for reproducible deployments, or use
-`@latest` to receive the newest release whenever the MCP process starts.
+configuration shown below. `@latest` receives the newest release whenever the
+MCP process starts; pin an exact version (for example
+`limesurvey-mcp-server@1.3.1`) for reproducible deployments.
+
+> **`npx` prefers an existing global installation** over a registry download,
+> even a broken or outdated one, so `@latest` does not update a machine that
+> also has the package installed globally. If the server fails to start, see
+> [Troubleshooting](docs/INSTALLATION.md#troubleshooting).
 
 ### Option B: from source
 
@@ -134,7 +140,7 @@ codex mcp add limesurvey `
   --env "LIMESURVEY_USERNAME=rpc-user" `
   --env "LIMESURVEY_PASSWORD=replace-me" `
   --env "LIMESURVEY_READ_ONLY=true" `
-  -- npx -y limesurvey-mcp-server@1.3.0
+  -- npx -y limesurvey-mcp-server@latest
 ```
 
 Example for clients that support `mcpServers` configuration:
@@ -144,7 +150,7 @@ Example for clients that support `mcpServers` configuration:
   "mcpServers": {
     "limesurvey": {
       "command": "npx",
-      "args": ["-y", "limesurvey-mcp-server@1.3.0"],
+      "args": ["-y", "limesurvey-mcp-server@latest"],
       "env": {
         "LIMESURVEY_URL": "https://survey.example.com/index.php/admin/remotecontrol",
         "LIMESURVEY_USERNAME": "rpc-user",

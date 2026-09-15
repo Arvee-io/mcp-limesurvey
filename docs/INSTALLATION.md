@@ -18,7 +18,7 @@ and visible surveys have been verified.
 
 ## Codex CLI
 
-Register the versioned npm package:
+Register the npm package:
 
 ```powershell
 $remoteControlUrl = "https://survey.example.com/index.php/admin/remotecontrol"
@@ -30,7 +30,7 @@ codex mcp add limesurvey `
   --env "LIMESURVEY_READ_ONLY=true" `
   --env "LIMESURVEY_EXPORT_DIR=C:/limesurvey-mcp/exports" `
   --env "LIMESURVEY_THEME_DIR=C:/limesurvey-mcp/themes" `
-  -- npx -y limesurvey-mcp-server@1.3.0
+  -- npx -y limesurvey-mcp-server@latest
 ```
 
 The command stores the environment values in the Codex MCP configuration.
@@ -53,7 +53,7 @@ Clients that support the common `mcpServers` format can use:
   "mcpServers": {
     "limesurvey": {
       "command": "npx",
-      "args": ["-y", "limesurvey-mcp-server@1.3.0"],
+      "args": ["-y", "limesurvey-mcp-server@latest"],
       "env": {
         "LIMESURVEY_URL": "https://survey.example.com/index.php/admin/remotecontrol",
         "LIMESURVEY_USERNAME": "rpc-user",
@@ -77,19 +77,24 @@ A global installation avoids an `npx` package lookup at every MCP process
 start:
 
 ```bash
-npm install --global limesurvey-mcp-server@1.3.0
+npm install --global limesurvey-mcp-server@latest
 limesurvey-mcp
 ```
 
 The binary still requires the LimeSurvey environment variables. Configure the
 MCP client to run `limesurvey-mcp` and inject them there.
 
+A global installation also takes precedence over the registry for every
+`npx -y limesurvey-mcp-server@...` call on the same machine. Once it exists,
+update it explicitly with every release; `@latest` in an `npx` command will not
+do it.
+
 ## Install from Source
 
 ```bash
 git clone https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server.git
 cd limesurvey-mcp-server
-git checkout v1.3.0
+git checkout v1.3.1
 npm ci
 npm test
 ```
@@ -102,7 +107,7 @@ Configure the MCP client to run Node.js with the absolute path to
 ```bash
 git clone https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server.git
 cd limesurvey-mcp-server
-git checkout v1.3.0
+git checkout v1.3.1
 cp .env.example .env
 docker compose up --build -d
 ```
@@ -139,11 +144,12 @@ test records and must only be used on an approved test instance. See
 
 ## Update
 
-For a pinned `npx` installation, change the version in the MCP configuration
-and restart the client:
+An `npx` installation on `@latest` picks up a new release at the next MCP
+process start; restart the client fully. For a pinned `npx` installation,
+change the version in the MCP configuration and restart:
 
 ```text
-limesurvey-mcp-server@1.3.0
+limesurvey-mcp-server@1.3.1
 ```
 
 For a global installation:
@@ -152,11 +158,15 @@ For a global installation:
 npm install --global limesurvey-mcp-server@latest
 ```
 
+Run this global update even when the MCP client is configured with
+`npx -y ... @latest`: `npx` resolves to the global installation first, so an
+outdated global package silently keeps serving the old version.
+
 For a source installation:
 
 ```bash
 git fetch --tags
-git checkout v1.3.0
+git checkout v1.3.1
 npm ci
 npm test
 ```
@@ -181,6 +191,51 @@ Remove stored MCP credentials and generated export or theme directories
 separately according to the local retention policy.
 
 ## Troubleshooting
+
+The server contacts LimeSurvey lazily: the session key is fetched on the first
+tool call, not at startup. A client-side `Failed to connect` therefore means the
+process never started, and never means wrong credentials or an unreachable
+instance — those surface as a failing tool call instead.
+
+### The MCP client reports `Failed to connect`
+
+1. **Check Node.js:** `node -v` must report 20 or newer.
+2. **Check for a broken global installation**, a known cause when the package
+   worked before and stopped after a release:
+
+   ```bash
+   npm ls -g limesurvey-mcp-server --depth=0
+   ```
+
+   An entry without a version number (`limesurvey-mcp-server@`) or a
+   `MODULE_NOT_FOUND` for `dist/src/index.js` means the global package is
+   corrupt. Because `npx -y` resolves to a global installation before the
+   registry, a broken one breaks `npx` too, regardless of the requested
+   version. Repair it:
+
+   ```bash
+   npm install --global limesurvey-mcp-server@latest
+   ```
+
+   Reconnecting the MCP server is enough after this; the environment is
+   unchanged.
+3. **Check the three required variables.** `LIMESURVEY_URL`,
+   `LIMESURVEY_USERNAME`, and `LIMESURVEY_PASSWORD` must all be present and
+   non-empty, or startup aborts. `LIMESURVEY_URL` must be an absolute
+   `http`/`https` URL; plain `http` to a non-loopback host additionally
+   requires `LIMESURVEY_ALLOW_INSECURE_HTTP=true`.
+4. **Reproduce outside the client** to read the actual error, which an MCP
+   client usually hides:
+
+   ```bash
+   LIMESURVEY_URL=https://survey.example.com/index.php/admin/remotecontrol \
+   LIMESURVEY_USERNAME=rpc-user LIMESURVEY_PASSWORD=x \
+   npx -y limesurvey-mcp-server@latest
+   ```
+
+   A server that starts prints its preflight warnings and then waits on stdio.
+
+### Other symptoms
 
 - `Invalid user name or password`: verify the dedicated account, password, and
   `LIMESURVEY_AUTH_PLUGIN`.
