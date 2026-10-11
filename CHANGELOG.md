@@ -47,6 +47,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tool description and the README. The description names
   `verify_survey_against_lss` as the alternative.
 
+- New write tool `replace_question` (write scope `content`), based on user
+  feedback that question attributes and answer options cannot be changed with
+  `set_question_properties`: it replaces one main question of an inactive survey
+  by the question in a `.lsq` file (`import_data` or `import_data_path`), in the
+  same group and at the same position. It requires
+  `confirm_destructive_action=true` and uses only official RemoteControl methods
+  (`get_survey_properties`, `get_question_properties`, `list_questions`,
+  `set_question_properties`, `import_question`, `delete_question`). The survey
+  must be inactive (`SURVEY_ACTIVE`), the question must belong to `survey_id`
+  (`QUESTION_SURVEY_MISMATCH`) and be a main question (`NOT_A_MAIN_QUESTION`);
+  the old question is the only one that can be deleted. A failure after the
+  first write is rolled back (the imported question is deleted, the old code is
+  restored); `REPLACE_QUESTION_FAILED` names the step and lists `manual_cleanup`
+  if a rollback step failed too. Question IDs change; legacy conditions that
+  reference the old ID are not migrated. This makes 75 tools (74 before); tests,
+  README (scope table), `docs/LIVE_TESTING.md`, the live runner (it replaces the
+  question of its inactive test survey), and the S-01 scope table were adjusted.
+  The hint for question attributes and answer options that
+  `set_question_properties` cannot write now names `replace_question`.
+
 ### Documentation
 
 - README section "Limits of RemoteControl": no mail send log, no list of survey

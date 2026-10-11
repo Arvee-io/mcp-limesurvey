@@ -82,6 +82,7 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_set_question_properties: "content",
   limesurvey_set_quota_properties: "content",
   limesurvey_assign_survey_theme: "content",
+  limesurvey_replace_question: "content",
 
   // lifecycle
   limesurvey_activate_survey: "lifecycle",
