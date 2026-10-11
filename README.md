@@ -141,9 +141,12 @@ codex mcp add limesurvey `
   --env "LIMESURVEY_URL=https://survey.example.com/index.php/admin/remotecontrol" `
   --env "LIMESURVEY_USERNAME=rpc-user" `
   --env "LIMESURVEY_PASSWORD=replace-me" `
-  --env "LIMESURVEY_READ_ONLY=true" `
+  --env "LIMESURVEY_WRITE_SCOPE=content" `
   -- npx -y limesurvey-mcp-server@latest
 ```
+
+`content` lets an assistant build and correct surveys; use `none` for read-only
+access (see [Write Safety](#write-safety)).
 
 Example for clients that support `mcpServers` configuration:
 
@@ -157,7 +160,7 @@ Example for clients that support `mcpServers` configuration:
         "LIMESURVEY_URL": "https://survey.example.com/index.php/admin/remotecontrol",
         "LIMESURVEY_USERNAME": "rpc-user",
         "LIMESURVEY_PASSWORD": "replace-me",
-        "LIMESURVEY_READ_ONLY": "true",
+        "LIMESURVEY_WRITE_SCOPE": "content",
         "LIMESURVEY_THEME_DIR": "C:/limesurvey-mcp/themes"
       }
     }
@@ -218,6 +221,12 @@ server's scope table is treated as `outreach`. One call is argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
 responses; `lss`, `csv`, and `txt` imports stay at `content`.
+
+`content` covers every survey setting that LimeSurvey lets
+`set_survey_properties` change, including start and expiry dates, notification
+and administrator addresses, and public registration. Choose `none` when an
+assistant should only read.
+
 Additional confirmation literals are required for high-impact actions:
 
 | Action | Required argument |

@@ -12,6 +12,13 @@ if (process.env.LIMESURVEY_LIVE_TEST_CONFIRM !== REQUIRED_CONFIRMATION) {
 if (process.env.LIMESURVEY_READ_ONLY === "true") {
   throw new Error("LIMESURVEY_READ_ONLY must be false for the live integration test.");
 }
+const liveWriteScope = process.env.LIMESURVEY_WRITE_SCOPE?.trim().toLowerCase();
+if (liveWriteScope && liveWriteScope !== "outreach") {
+  throw new Error(
+    "LIMESURVEY_WRITE_SCOPE must be unset or outreach for the live integration test; a narrower scope would block "
+      + "cleanup deletions and leave test data behind.",
+  );
+}
 
 const fixtureRoot = process.env.LIMESURVEY_LIVE_FIXTURE_ROOT;
 if (!fixtureRoot) throw new Error("LIMESURVEY_LIVE_FIXTURE_ROOT must point to an official LimeSurvey source checkout.");

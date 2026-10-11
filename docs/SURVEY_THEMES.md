@@ -24,7 +24,7 @@ installation, set `target_limesurvey_major` explicitly to `6`.
 ```text
 LIMESURVEY_THEME_DIR=C:/limesurvey-mcp/themes
 LIMESURVEY_MAX_THEME_ASSET_BYTES=5242880
-LIMESURVEY_READ_ONLY=false
+LIMESURVEY_WRITE_SCOPE=content
 ```
 
 Theme generation, validation, and the publication guide work under every write
