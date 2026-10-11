@@ -25,8 +25,10 @@ function readPasswordFile(file: string): { password: string; warnings: string[] 
   if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) {
     throw new LimeSurveyError(
       `LIMESURVEY_PASSWORD_FILE ${file} is encoded as UTF-16 (byte order mark FF FE or FE FF). That is what Windows `
-        + 'PowerShell 5.1 writes for ">" and Out-File. Write the file again as UTF-8 without BOM, for example in '
-        + "PowerShell 7: [IO.File]::WriteAllText(<path>, <password>, [Text.UTF8Encoding]::new($false)).",
+        + 'PowerShell 5.1 writes for ">" and Out-File. Write the file again as UTF-8 without BOM: in PowerShell 7 read '
+        + "the password with Read-Host -AsSecureString and save it with [IO.File]::WriteAllText(<path>, <plain text "
+        + "from the secure string>, [Text.UTF8Encoding]::new($false)), as shown in docs/INSTALLATION.md (Store the "
+        + "password in a file). Never type the password itself into a command line.",
     );
   }
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
@@ -35,6 +37,12 @@ function readPasswordFile(file: string): { password: string; warnings: string[] 
     content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     throw new LimeSurveyError(`LIMESURVEY_PASSWORD_FILE ${file} is not valid UTF-8. Save it as UTF-8 without BOM.`);
+  }
+  if (content.includes("\u0000")) {
+    throw new LimeSurveyError(
+      `LIMESURVEY_PASSWORD_FILE ${file} contains NUL bytes, which usually means UTF-16 without a byte order mark. `
+        + "Save it as UTF-8 without BOM (see docs/INSTALLATION.md, Store the password in a file).",
+    );
   }
   const password = content.replace(/[\r\n]+$/, "");
   if (password === "") throw new LimeSurveyError(`LIMESURVEY_PASSWORD_FILE ${file} is empty.`);
