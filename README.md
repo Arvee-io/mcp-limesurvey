@@ -292,8 +292,9 @@ participant table, and is access closed?" without guessing: `exists` and
 the release has it, otherwise the participant table
 (`closed_access_basis` names which). The survey property `usetokens` is not
 evaluated by LimeSurvey 6.17.11 and says nothing about either. A `get_summary`
-answer "No available data" is reported as `NO_PARTICIPANT_TABLE` (open access)
-or `NO_RESPONSE_TABLE` (survey never activated).
+answer "No available data" is reported as `NO_PARTICIPANT_TABLE` (no participant
+table; access follows `access_mode`) or `NO_RESPONSE_TABLE` (survey not active:
+never activated or deactivated).
 
 ## Responsive Survey Themes
 

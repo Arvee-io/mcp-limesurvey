@@ -58,7 +58,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`closed_access_basis`). `usetokens` is not evaluated by LimeSurvey 6.17.11 and
   is documented as such in `get_survey_properties`.
 - `get_summary` answers "No available data" with `NO_PARTICIPANT_TABLE`
-  (`token_*` statistics, open access) or `NO_RESPONSE_TABLE` (never activated).
+  (`token_*` statistics, no participant table; access follows `access_mode`) or
+  `NO_RESPONSE_TABLE` (survey not active: never activated or deactivated).
 
 - Optional MCP-only `survey_id` for `get_group_properties` and
   `get_question_properties` (never sent to LimeSurvey): the server compares it
