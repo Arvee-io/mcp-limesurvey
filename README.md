@@ -103,7 +103,7 @@ Required:
 |---|---|
 | `LIMESURVEY_URL` | Exact RemoteControl URL, for example `https://survey.example.com/index.php/admin/remotecontrol` |
 | `LIMESURVEY_USERNAME` | LimeSurvey service account |
-| `LIMESURVEY_PASSWORD` | Service account password |
+| `LIMESURVEY_PASSWORD` or `LIMESURVEY_PASSWORD_FILE` | Service account password, or the path to a file that holds only the password (UTF-8 without BOM). If both are set, the file wins and `LIMESURVEY_PASSWORD` is ignored with a startup warning |
 
 Important optional variables:
 
@@ -131,6 +131,22 @@ Important optional variables:
 
 The server intentionally does not load `.env` itself. The MCP client, process
 manager, or container runtime owns secret injection.
+
+### Keeping the password out of the client configuration
+
+With `LIMESURVEY_PASSWORD_FILE` the password lives in a file that only your own
+account can read, instead of in the MCP client configuration (which is often a
+readable JSON file or a shell command that ends up in the history). The server
+reads the file once at start-up, removes a UTF-8 BOM and the trailing line
+ending, and rejects an empty file, invalid UTF-8, and UTF-16 (what Windows
+PowerShell 5.1 writes with `>` or `Out-File`). It never prints the password or
+any part of it: error messages name only the variable and the path, and
+`limesurvey_get_instance_info` reports just `password_source` (`file` or
+`env`). On POSIX systems a start-up warning appears when the file is readable
+by group or others (`chmod 600`); on Windows restrict the file with `icacls`.
+Step-by-step commands that never put the password into a command line:
+[Store the password in a file](docs/INSTALLATION.md#store-the-password-in-a-file).
+After switching, remove `LIMESURVEY_PASSWORD` from the client configuration.
 
 ## MCP Client Setup
 

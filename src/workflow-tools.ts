@@ -538,7 +538,7 @@ export function registerWorkflowTools(
     {
       title: "Get MCP server and LimeSurvey capability info",
       description: "Report server-side configuration without any RemoteControl call by default: server_version, "
-        + "instance_host, transport, read_only (true only for write scope none), write_scope and "
+        + "instance_host, password_source (file or env, never the path or the content), transport, read_only (true only for write scope none), write_scope and "
         + "write_scope_source, experimental_methods_enabled, configured export/import/theme directories (each "
         + "with a local exists/writable check), and a capabilities summary. capabilities are booleans computed "
         + "after the write scope and the configuration; capability_blocked_by has the same keys and holds null "
@@ -565,6 +565,7 @@ export function registerWorkflowTools(
       const base: Record<string, JsonValue> = {
         server_version: SERVER_VERSION,
         instance_host: config.url.host,
+        password_source: config.passwordSource ?? "env",
         transport: config.transport ?? "stdio",
         read_only: scope === "none",
         write_scope: scope,

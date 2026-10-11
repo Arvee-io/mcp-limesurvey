@@ -77,6 +77,53 @@ Clients that support the common `mcpServers` format can use:
 Use absolute paths. On Windows, either use forward slashes as shown or escape
 backslashes in JSON.
 
+## Store the password in a file
+
+Instead of `LIMESURVEY_PASSWORD` in the client configuration, set
+`LIMESURVEY_PASSWORD_FILE` to a file that contains only the password. Never
+type the password as a literal into a command line: it would stay in the
+PowerShell history or the shell history. The commands below ask for it instead.
+
+Windows (PowerShell 7):
+
+```powershell
+$passwordFile = Join-Path $env:USERPROFILE ".limesurvey-mcp\password.txt"
+New-Item -ItemType Directory -Force (Split-Path $passwordFile) | Out-Null
+$secure = Read-Host "LimeSurvey service account password" -AsSecureString
+$plain = [System.Net.NetworkCredential]::new("", $secure).Password
+[IO.File]::WriteAllText($passwordFile, $plain, [Text.UTF8Encoding]::new($false))
+$plain = $null
+icacls $passwordFile /inheritance:r /grant:r "$([Security.Principal.WindowsIdentity]::GetCurrent().Name):(R,W)"
+```
+
+`icacls` removes the inherited permissions and leaves read and write access to
+the current user only; the result lists `<domain>\<user>:(R,W)`. Do not create
+the file with `>` or `Out-File` in Windows PowerShell 5.1: it writes UTF-16 (the
+first bytes are `FF FE`), and the server rejects such a file with a message that
+names UTF-16 and the fix.
+
+Linux and macOS:
+
+```bash
+umask 077
+mkdir -p ~/.limesurvey-mcp
+read -rs -p "LimeSurvey service account password: " lime_pw; echo
+printf '%s' "$lime_pw" > ~/.limesurvey-mcp/password.txt
+unset lime_pw
+chmod 600 ~/.limesurvey-mcp/password.txt
+```
+
+Then set `LIMESURVEY_PASSWORD_FILE` to the absolute path of the file (forward
+slashes work on Windows, for example `C:/Users/<you>/.limesurvey-mcp/password.txt`)
+and **remove `LIMESURVEY_PASSWORD` from the MCP client configuration**. If both
+are set, the file wins, `LIMESURVEY_PASSWORD` is ignored, and the server prints a
+start-up warning that names both variables (never their values). Only a UTF-8
+BOM and the trailing line ending are removed; blanks inside or around the
+password stay part of it. `limesurvey_get_instance_info` shows
+`password_source: "file"` (without path or content). On POSIX systems the server
+also warns when the file is readable by group or others. In Docker, mount the
+file read-only and give the path inside the container.
+
 ## Global npm Installation
 
 A global installation avoids an `npx` package lookup at every MCP process
@@ -226,9 +273,10 @@ instance — those surface as a failing tool call instead.
 
    Reconnecting the MCP server is enough after this; the environment is
    unchanged.
-3. **Check the three required variables.** `LIMESURVEY_URL`,
-   `LIMESURVEY_USERNAME`, and `LIMESURVEY_PASSWORD` must all be present and
-   non-empty, or startup aborts. `LIMESURVEY_URL` must be an absolute
+3. **Check the required variables.** `LIMESURVEY_URL`,
+   `LIMESURVEY_USERNAME`, and one of `LIMESURVEY_PASSWORD` or
+   `LIMESURVEY_PASSWORD_FILE` must be present and non-empty, or startup
+   aborts. `LIMESURVEY_URL` must be an absolute
    `http`/`https` URL; plain `http` to a non-loopback host additionally
    requires `LIMESURVEY_ALLOW_INSECURE_HTTP=true`.
 4. **Reproduce outside the client** to read the actual error, which an MCP
