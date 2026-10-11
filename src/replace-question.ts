@@ -303,6 +303,24 @@ export async function replaceQuestion(
     newQids: [],
   };
   let failedStep = "rename_old_question";
+  let expectedTitle = oldTitle;
+  let lastNewQid: number | undefined;
+
+  const finish = async (newQid: number): Promise<JsonValue> => {
+    // 9. Verification only reports; the old question is gone and cannot be restored here.
+    const verification = await verify(client, surveyId, groupId, oldQid, newQid, lsq.title, before);
+    return {
+      survey_id: surveyId,
+      group_id: groupId,
+      old_question_id: oldQid,
+      new_question_id: newQid,
+      title: lsq.title,
+      question_order: verification.question_order,
+      steps: steps as unknown as JsonValue,
+      verification: verification.report,
+      notes: NOTES,
+    };
+  };
 
   try {
     // 4. The same code would make import_question fail ("Question title already exist"), so free it first.
@@ -333,6 +351,7 @@ export async function replaceQuestion(
     state.importAttempted = true;
     const newQid = expectQid("import_question", await client.call("import_question", [surveyId, groupId, file.toString("base64"), "lsq", lsq.mandatory]));
     state.newQids.push(newQid);
+    lastNewQid = newQid;
     steps.push({ step: "import_question", status: "done", detail: { new_question_id: newQid } });
 
     // 6. Take the old position (LimeSurvey renumbers the group after the change).
@@ -342,7 +361,7 @@ export async function replaceQuestion(
 
     // 7. Delete exactly the old question, after reading it back: same survey, main question, the code this call gave it.
     failedStep = "verify_old_question";
-    const expectedTitle = tempTitle ?? oldTitle;
+    expectedTitle = tempTitle ?? oldTitle;
     const check = objectValue(await client.call("get_question_properties", [oldQid, ["sid", "parent_qid", "title"]]));
     if (integer(check?.sid) !== surveyId || integer(check?.parent_qid) !== 0 || str(check?.title) !== expectedTitle) {
       throw new LimeSurveyError(
@@ -358,20 +377,44 @@ export async function replaceQuestion(
     }
     steps.push({ step: "delete_old_question", status: "done", detail: { old_question_id: oldQid } });
 
-    // 9. Verification only reports; the old question is gone and cannot be restored here.
-    const verification = await verify(client, surveyId, groupId, oldQid, newQid, lsq.title, before);
-    return {
-      survey_id: surveyId,
-      group_id: groupId,
-      old_question_id: oldQid,
-      new_question_id: newQid,
-      title: lsq.title,
-      question_order: verification.question_order,
-      steps: steps as unknown as JsonValue,
-      verification: verification.report,
-      notes: NOTES,
-    };
+    return await finish(newQid);
   } catch (value) {
+    // delete_question commits before it answers, so a timeout, a 5xx or a dropped connection can hide a delete
+    // that happened. Rolling back then would delete the replacement as well; look at the old question first.
+    if (failedStep === "delete_old_question" && lastNewQid !== undefined) {
+      const probe = await probeOldQuestion(client, surveyId, oldQid, expectedTitle);
+      if (probe === "gone") {
+        steps.push({
+          step: "delete_old_question",
+          status: "done",
+          detail: { old_question_id: oldQid, note: "the answer of delete_question was unclear (" + causeOf(value) + "), but the old question is confirmed gone" },
+        });
+        return await finish(lastNewQid);
+      }
+      if (probe === "unknown") {
+        const cause = causeOf(value);
+        throw new LimeSurveyError(
+          `replace_question failed at step "delete_old_question": ${cause} NOT ROLLED BACK: the old question ${oldQid} may already be deleted, `
+            + `so the imported question ${lastNewQid} was kept. Check by hand which of the two exists, see details.manual_cleanup.`,
+          "REPLACE_QUESTION_FAILED",
+          {
+            failed_step: failedStep,
+            cause,
+            old_question_id: oldQid,
+            new_question_id: lastNewQid,
+            steps: steps as unknown as JsonValue,
+            rollback: [],
+            rolled_back: false,
+            manual_cleanup: [{
+              action: "check_questions",
+              old_question_id: oldQid,
+              new_question_id: lastNewQid,
+              hint: `Open survey ${surveyId}: if question ${oldQid} still exists (code "${expectedTitle}"), delete question ${lastNewQid} and restore the code "${oldTitle}" on ${oldQid}; if ${oldQid} is gone, keep ${lastNewQid}.`,
+            }],
+          },
+        );
+      }
+    }
     const result = await rollback(client, state);
     const rolledBack = result.manualCleanup.length === 0;
     const cause = causeOf(value);
@@ -392,6 +435,25 @@ export async function replaceQuestion(
         manual_cleanup: result.manualCleanup,
       },
     );
+  }
+}
+
+/** Whether the old question is still there after an unclear delete_question: present, gone, or unknown. */
+async function probeOldQuestion(
+  client: LimeSurveyClient,
+  surveyId: number,
+  oldQid: number,
+  expectedTitle: string,
+): Promise<"present" | "gone" | "unknown"> {
+  try {
+    const answer = objectValue(await client.call("get_question_properties", [oldQid, ["sid", "parent_qid", "title"]]));
+    if (!answer) return "unknown";
+    if (integer(answer.sid) === surveyId && integer(answer.parent_qid) === 0 && str(answer.title) === expectedTitle) return "present";
+    if ((answer.sid ?? null) === null && (answer.title ?? null) === null) return "gone";
+    return "unknown";
+  } catch (value) {
+    // LimeSurvey answers a missing qid with the status "Error: Invalid question ID"; transport errors never match.
+    return value instanceof LimeSurveyError && /invalid questions?id/i.test(value.message) ? "gone" : "unknown";
   }
 }
 
