@@ -51,6 +51,30 @@ function structuredErrorMessage(value: JsonValue | undefined): string | undefine
   return undefined;
 }
 
+/**
+ * The statuses LimeSurvey 6.17.11 returns instead of [] when a list_* method finds nothing (RemoteControl handle:
+ * list_surveys, list_survey_groups, list_users, list_groups, list_questions, list_quotas, list_participants).
+ * Only these exact texts of exactly these methods count; "Error: No survey participant list" (no participant
+ * table) and every other status stay errors.
+ */
+const EMPTY_LIST_STATUS: Readonly<Record<string, string>> = {
+  list_surveys: "no surveys found",
+  list_survey_groups: "no survey groups found",
+  list_users: "no users found",
+  list_groups: "no groups found",
+  list_questions: "no questions found",
+  list_quotas: "no quotas found",
+  list_participants: "no survey participants found.",
+};
+
+function isEmptyListAnswer(method: string, value: JsonValue): boolean {
+  const expected = EMPTY_LIST_STATUS[method];
+  return expected !== undefined
+    && isObject(value)
+    && Object.keys(value).length === 1
+    && statusMessage(value)?.trim().toLowerCase() === expected;
+}
+
 function hasApiError(value: JsonValue | undefined): boolean {
   if (!isObject(value)) return false;
   if (errorCode(value)) return true;
@@ -110,6 +134,8 @@ export class LimeSurveyClient {
       key = await this.getSessionKey();
       result = await this.rpc(method, [key, ...params]);
     }
+    // An empty list is not an error: LimeSurvey answers it with a status text instead of an array.
+    if (isEmptyListAnswer(method, result)) return [];
     this.throwForApiError(method, params, result);
     return result;
   }

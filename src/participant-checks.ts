@@ -126,8 +126,6 @@ export async function fetchParticipants(client: LimeSurveyClient, surveyId: numb
       if (error instanceof LimeSurveyError && /No survey participant list/i.test(error.message)) {
         return { exists: false, rows: [], truncated: false };
       }
-      // LimeSurvey answers an empty page (also the page behind the last row) with a status text.
-      if (error instanceof LimeSurveyError && /No survey participants found/i.test(error.message)) break;
       throw error;
     }
     if (!Array.isArray(value) || value.length === 0) break;
