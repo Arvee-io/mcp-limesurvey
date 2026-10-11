@@ -14,7 +14,7 @@ export function scopeAllows(current: WriteScope, required: WriteScope): boolean 
  * and the workflow/theme tools all enforce through assertWriteScope(), and a tool missing here is
  * treated as "outreach" (fail closed). One argument-dependent exception lives in requiredWriteScope():
  * limesurvey_import_survey with import_data_type "lsa" needs "outreach" (a .lsa activates the survey and
- * imports participants and responses).
+ * imports participants and responses), and limesurvey_invite_participants with dry_run=true needs only "none".
  *
  * - none: reads, session handling, and local-only tools (theme generation/validation, *_to_file exports).
  * - content: creates or changes survey content (structure, texts, quotas, theme assignment).
@@ -53,6 +53,7 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_get_survey_languages: "none",
   limesurvey_list_filtered_participants: "none",
   limesurvey_get_participant_table_status: "none",
+  limesurvey_validate_participants: "none",
   limesurvey_list_response_export_formats: "none",
   limesurvey_get_instance_info: "none",
   limesurvey_export_responses_to_file: "none",
@@ -126,6 +127,8 @@ export function requiredWriteScope(toolName: string, input?: Record<string, unkn
   if (toolName === "limesurvey_import_survey" && String(input?.import_data_type).trim().toLowerCase() === "lsa") {
     return "outreach";
   }
+  // A dry run only reads the participant list and never calls invite_participants.
+  if (toolName === "limesurvey_invite_participants" && input?.dry_run === true) return "none";
   return TOOL_WRITE_SCOPES[toolName] ?? "outreach";
 }
 

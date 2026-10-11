@@ -8,7 +8,8 @@ import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
 import { strictInput } from "./input-schema.js";
 import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
-import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
+import { validateParticipants } from "./participant-checks.js";
+import { buildRpcParams, jsonValueSchema, serverUtcOffsetSchema, toolDefinitions } from "./tool-definitions.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
@@ -412,6 +413,28 @@ export function registerWorkflowTools(
           + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
       };
     }),
+  );
+
+  server.registerTool(
+    "limesurvey_validate_participants",
+    {
+      title: "Validate survey participants",
+      description: "Read-only check of the whole participant table before an invitation run: leading/trailing "
+        + "whitespace (email, firstname, lastname, token), duplicate email addresses (trimmed, case-insensitive) and "
+        + "tokens, address format (every address of a comma/semicolon list, with the pattern LimeSurvey's "
+        + "invite_participants uses), validfrom/validuntil against the server time, validfrom after validuntil, "
+        + "emailstatus other than OK, and missing email or token. Returns issues [{tid, field, code, detail}] and "
+        + "counts_by_code (codes WHITESPACE, DUPLICATE_EMAIL, DUPLICATE_TOKEN, INVALID_EMAIL, NOT_YET_VALID, EXPIRED, "
+        + "INVALID_VALIDITY_RANGE, EMAILSTATUS_NOT_OK, MISSING_EMAIL, MISSING_TOKEN). The server time is the HTTP Date "
+        + "header of the LimeSurvey answer; validfrom/validuntil are read in the server's local time, whose UTC "
+        + "offset is server_utc_offset_minutes or, without it, the timezone of the MCP host (time_basis says which). "
+        + "Entries within 60 minutes of the current time are listed under borderline. Uses only list_participants.",
+      inputSchema: strictInput({ survey_id: surveyId, server_utc_offset_minutes: serverUtcOffsetSchema }),
+      outputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ survey_id, server_utc_offset_minutes }) => run(config, "validate_participants",
+      () => validateParticipants(client, survey_id, server_utc_offset_minutes)),
   );
 
   server.registerTool(

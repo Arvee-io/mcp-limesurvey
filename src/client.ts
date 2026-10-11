@@ -65,11 +65,20 @@ export class LimeSurveyClient {
   private requestId = 0;
   private sessionKey: string | undefined;
   private sessionPromise: Promise<string> | undefined;
+  private serverDate: Date | undefined;
 
   constructor(
     private readonly config: LimeSurveyConfig,
     private readonly fetchImpl: FetchImplementation = fetch,
   ) {}
+
+  /**
+   * The HTTP Date header (the web server's clock, UTC) of the last answer. RemoteControl has no clock method,
+   * so this is the only source of the LimeSurvey server time.
+   */
+  get lastServerDate(): Date | undefined {
+    return this.serverDate;
+  }
 
   async openSession(): Promise<{ status: "connected"; auth_plugin: string }> {
     await this.getSessionKey();
@@ -148,6 +157,9 @@ export class LimeSurveyClient {
       const reason = error instanceof Error ? error.message : String(error);
       throw new LimeSurveyError(`Could not reach LimeSurvey for ${method}: ${reason}`);
     }
+
+    const parsedDate = Date.parse(response.headers.get("date") ?? "");
+    this.serverDate = Number.isNaN(parsedDate) ? undefined : new Date(parsedDate);
 
     if (!response.ok) {
       throw new LimeSurveyError(
