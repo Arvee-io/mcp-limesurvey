@@ -459,3 +459,110 @@ test("[S-05] validate_participants on a survey without participant table reports
     await session.close();
   }
 });
+
+const defaultLimitConfig: LimeSurveyConfig = { ...baseConfig, maxResponseChars: 50_000 };
+
+function largeTable(count: number): Fixture[] {
+  return Array.from({ length: count }, (_, index) => {
+    const tid = index + 1;
+    return participant(
+      tid,
+      tid % 3 === 0 ? { sent: "2026-10-01 09:00" } : {},
+      { email: `participant.with.a.long.address.${tid}@subdomain.example.test`, firstname: tid % 2 === 0 ? ` Padded${tid}` : `First${tid}` },
+    );
+  });
+}
+
+test("[S-05] dry_run of a 600-row table stays under the default response limit and caps its lists", async () => {
+  const big = largeTable(600);
+  const session = await connected(defaultLimitConfig, (request) =>
+    request.method === "get_site_settings" ? { status: "No permission" } : listParticipants(big)(request));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_invite_participants",
+      arguments: { survey_id: 5, dry_run: true, server_utc_offset_minutes: 0 },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const output = response.structuredContent as { truncated?: boolean };
+    assert.equal(output.truncated, undefined, "the dry run report must not be cut by the response limit");
+    const report = body(response.structuredContent);
+    assert.equal(report.dry_run, true);
+    assert.ok(JSON.stringify(report).length <= 50_000, String(JSON.stringify(report).length));
+    const counts = report.counts as { would_receive: number; would_not_receive: number; by_reason: Record<string, number> };
+    assert.equal(counts.would_receive, 400);
+    assert.equal(counts.would_not_receive, 200);
+    assert.equal(counts.by_reason.already_invited, 200);
+    assert.ok(rows(report.would_receive).length <= 100);
+    assert.ok(rows(report.would_not_receive).length <= 100);
+    assert.ok(rows(report.not_reached).length <= 100);
+    const truncatedLists = report.truncated_lists as Record<string, { returned: number; total: number }>;
+    assert.equal(truncatedLists.would_receive?.total, 400);
+    assert.equal(truncatedLists.would_not_receive?.total, 200);
+  } finally {
+    await session.close();
+  }
+});
+
+test("[S-05] dry_run with token_ids does not list the unselected rows of a large table", async () => {
+  const big = largeTable(600);
+  const session = await connected(defaultLimitConfig, (request) =>
+    request.method === "get_site_settings" ? { status: "No permission" } : listParticipants(big)(request));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_invite_participants",
+      arguments: { survey_id: 5, dry_run: true, token_ids: [1], server_utc_offset_minutes: 0 },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const output = response.structuredContent as { truncated?: boolean };
+    assert.equal(output.truncated, undefined);
+    const report = body(response.structuredContent);
+    assert.equal(report.dry_run, true);
+    assert.ok(JSON.stringify(report).length < 10_000, String(JSON.stringify(report).length));
+    assert.deepEqual(rows(report.would_receive).map((item) => item.tid), [1]);
+    const counts = report.counts as { not_selected: number; by_reason: Record<string, number> };
+    assert.equal(counts.not_selected, 599);
+    assert.equal(counts.by_reason.not_selected, 599);
+    assert.ok(!rows(report.would_not_receive).some((item) => (item.reasons as string[]).includes("not_selected")));
+  } finally {
+    await session.close();
+  }
+});
+
+test("[S-05] validate_participants keeps its answer within LIMESURVEY_MAX_RESPONSE_CHARS and marks the cut", async () => {
+  const noTokens = Array.from({ length: 2000 }, (_, index) => participant(index + 1, { token: "" }));
+  const config: LimeSurveyConfig = { ...baseConfig, maxResponseChars: 20_000 };
+  const session = await connected(config, listParticipants(noTokens));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_validate_participants",
+      arguments: { survey_id: 5, server_utc_offset_minutes: 0 },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const report = body(response.structuredContent);
+    assert.ok(JSON.stringify(report).length <= 20_000, String(JSON.stringify(report).length));
+    assert.equal(report.participant_count, 2000);
+    assert.equal((report.counts_by_code as Record<string, number>).MISSING_TOKEN, 2000);
+    assert.ok(report.time_basis);
+    assert.equal(report.issues_truncated, true);
+    assert.equal(report.issues_total, 2000);
+    assert.ok(rows(report.issues).length < 2000);
+    assert.match(String(report.truncation_note), /LIMESURVEY_MAX_RESPONSE_CHARS/);
+  } finally {
+    await session.close();
+  }
+});
+
+test("[S-05] validate_participants does not mark a result that fits as truncated", async () => {
+  const session = await connected(baseConfig, listParticipants([participant(1, { token: "" })]));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_validate_participants",
+      arguments: { survey_id: 5, server_utc_offset_minutes: 0 },
+    });
+    const report = body(response.structuredContent);
+    assert.equal(rows(report.issues).length, 1);
+    assert.equal(report.issues_truncated, undefined);
+  } finally {
+    await session.close();
+  }
+});
