@@ -90,7 +90,12 @@ export class LimeSurveyClient {
 
     let key = await this.getSessionKey();
     let result = await this.rpc(method, [key, ...params]);
-    if (errorCode(result) === "ERR_INVALID_SESSION" || statusMessage(result) === "Invalid session key") {
+    if (
+      errorCode(result) === "ERR_INVALID_SESSION"
+      || statusMessage(result) === "Invalid session key"
+      // set_quota_properties reports an expired key as {success: false, message: "Invalid session key"}.
+      || (isObject(result) && result.success === false && result.message === "Invalid session key")
+    ) {
       this.sessionKey = undefined;
       this.sessionPromise = undefined;
       key = await this.getSessionKey();
