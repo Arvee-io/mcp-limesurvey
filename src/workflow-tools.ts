@@ -317,7 +317,8 @@ export function registerWorkflowTools(
         conditions: z.record(z.string(), jsonValueSchema).default({}),
         attributes: z.union([z.literal(false), z.array(z.string())]).default(false),
         unused: z.boolean().default(false),
-        offset: z.number().int().nonnegative().default(0),
+        offset: z.number().int().nonnegative().default(0)
+          .describe("Passed to LimeSurvey as list_participants start: a lower bound for the participant row ID (tid >= offset), not a row offset. Page with the last tid + 1."),
         limit: z.number().int().positive().max(1000).default(100),
       }),
       outputSchema,

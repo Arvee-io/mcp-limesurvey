@@ -105,11 +105,11 @@ names UTF-16 and the fix.
 Linux and macOS:
 
 ```bash
-umask 077
-mkdir -p ~/.limesurvey-mcp
-read -rs -p "LimeSurvey service account password: " lime_pw; echo
-printf '%s' "$lime_pw" > ~/.limesurvey-mcp/password.txt
-unset lime_pw
+(umask 077
+ mkdir -p ~/.limesurvey-mcp
+ printf 'LimeSurvey service account password: '
+ stty -echo; IFS= read -r lime_pw; stty echo; echo
+ printf '%s' "$lime_pw" > ~/.limesurvey-mcp/password.txt)
 chmod 600 ~/.limesurvey-mcp/password.txt
 ```
 

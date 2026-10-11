@@ -470,7 +470,7 @@ export const toolDefinitions: ToolDefinition[] = [
   define("set_participant_properties", "Set participant properties", `Update a participant matched by token or token-table ID.${describeWriteSpec("set_participant_properties")}`, "write", [surveyId(), p("query", jsonObject("Participant lookup properties.")), p("data", jsonObject("Participant properties to update."))], writeChecks("set_participant_properties")),
   define("list_participants", "List survey participants", "List and filter survey participants with server-side pagination.", "read", [
     surveyId(),
-    p("start", z.number().int().nonnegative().optional().describe("Zero-based result offset."), 0),
+    p("start", z.number().int().nonnegative().optional().describe("Lower bound for the participant row ID (tid): LimeSurvey returns rows with tid >= start, ordered by tid. It is not a row offset; page with the last tid + 1."), 0),
     p("limit", z.number().int().min(1).max(1000).optional().describe("Maximum participants to return."), 10),
     p("unused", z.boolean().optional().describe("Return only unused participants."), false),
     p("attributes", z.union([z.literal(false), stringArray("Participant fields to return.")]).optional().describe("Fields to return, or false for defaults."), false),
