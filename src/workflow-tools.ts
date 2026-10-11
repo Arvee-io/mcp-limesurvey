@@ -147,8 +147,9 @@ const EXPORT_FACTS = "Facts (checked 2026-10-11): no known 6.x plugin offers a s
   + "export_survey_structure for the 7.x line (open, not in any release); an own small plugin with that method "
   + "works with this tool.";
 
-const SERVER_TIME_NOTE = "server_time is the web server's clock in UTC (HTTP Date header). The LimeSurvey time zone "
-  + "and its timeadjust offset are readable through RemoteControl only for superadmins (get_site_settings('timeadjust')).";
+const SERVER_TIME_NOTE = "server_time is the web server's clock in UTC (HTTP Date header). The server's PHP time zone "
+  + "is not readable through RemoteControl. Only the timeadjust offset (hours between web server time and local time) "
+  + "is readable, and only by superadmins via get_site_settings('timeadjust').";
 
 function decodeBase64(value: JsonValue, maxBytes: number): Buffer {
   if (typeof value !== "string") {
@@ -596,10 +597,14 @@ export function registerWorkflowTools(
           + "not reload environment variables.",
         server_time: null,
         server_time_source: null,
-        server_time_hint: "No RemoteControl call was made, so there is no server time. Use probe_instance=true to read it.",
         server_time_note: SERVER_TIME_NOTE,
       };
-      if (!probe_instance) return base;
+      if (!probe_instance) {
+        return {
+          ...base,
+          server_time_hint: "No RemoteControl call was made, so there is no server time. Use probe_instance=true to read it.",
+        };
+      }
 
       let surveyCount: JsonValue = null;
       try {
