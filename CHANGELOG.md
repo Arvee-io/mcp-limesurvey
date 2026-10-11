@@ -60,7 +60,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the old question is the only one that can be deleted. A failure after the
   first write is rolled back (the imported question is deleted, the old code is
   restored); `REPLACE_QUESTION_FAILED` names the step and lists `manual_cleanup`
-  if a rollback step failed too. Question IDs change; legacy conditions that
+  if a rollback step failed too. The position is taken from the old question
+  after the rename, because `set_question_properties` renumbers the group, and
+  an unclear answer of `delete_question` (timeout, 5xx) is checked against the
+  old question before anything is rolled back; if its state cannot be read, the
+  imported question is kept and `manual_cleanup` names both questions. Question IDs change; legacy conditions that
   reference the old ID are not migrated. This makes 75 tools (74 before); tests,
   README (scope table), `docs/LIVE_TESTING.md`, the live runner (it replaces the
   question of its inactive test survey), and the S-01 scope table were adjusted.
