@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `LIMESURVEY_WRITE_SCOPE` (`none`, `content`, `lifecycle`, `outreach`;
+  cumulative), based on user feedback: the previous all-or-nothing
+  `LIMESURVEY_READ_ONLY` switch pushed people to call RemoteControl directly,
+  outside the server's confirmations. `content` allows building and correcting
+  surveys (imports, structure, texts, quotas, theme assignment); `lifecycle`
+  adds activation and deletion; `outreach` adds participants, responses,
+  uploads, and email. Every one of the 71 tools has a documented minimum scope
+  (new `src/write-scope.ts`, single source of truth); a tool without an entry is
+  treated as `outreach`. Blocked calls fail before any file read or RPC request
+  with `WRITE_SCOPE_INSUFFICIENT`, naming the current and required scope and
+  the variable that set it. `import_survey` with `import_data_type=lsa`
+  requires `outreach`, because a `.lsa` archive activates the survey and
+  imports participants and responses.
+- A startup warning when `LIMESURVEY_READ_ONLY` and `LIMESURVEY_WRITE_SCOPE`
+  are both set; the stricter level applies.
+- `get_instance_info` reports `write_scope` and `write_scope_source` and adds
+  `capability_blocked_by` (same keys as `capabilities`; `null` or the reason,
+  naming the required and current scope or the missing environment variable).
+  New capabilities: `theme_assignment`, `content_changes`,
+  `lifecycle_changes`, `participant_outreach`, `file_exports`.
+
+### Changed
+
+- `LIMESURVEY_READ_ONLY=true` is now an alias for `LIMESURVEY_WRITE_SCOPE=none`.
+  Without either variable behavior is unchanged (everything allowed).
+- Based on user feedback, tools that only work locally no longer count as
+  writes and are available in read-only mode and under every scope:
+  `generate_survey_theme`, `validate_survey_theme`,
+  `get_theme_publication_guide`, `export_responses_to_file`,
+  `export_responses_by_token_to_file`, `export_statistics_to_file`, and
+  `export_survey_to_file`. Their directory checks are unchanged.
+- `get_session_key` and `release_session_key` are allowed under every scope
+  (they were previously blocked in read-only mode).
+- `get_instance_info` computes `capabilities` after the write scope and the
+  configuration (still booleans). `import_via_path` was always `true` before,
+  even in read-only mode or without an import directory; it is now `false` with
+  a reason in `capability_blocked_by` in those cases.
+
 ## [1.3.1] - 2026-07-25
 
 ### Fixed

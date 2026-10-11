@@ -19,7 +19,8 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
 - **71 MCP tools:** official methods plus focused workflow and theme tools
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
-- **Safe write access:** server-enforced read-only mode and explicit confirmations
+- **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
+  outreach), a legacy read-only switch, and explicit confirmations
 - **Session management:** cached credentials, one retry after an invalid session,
   graceful release, timeouts, and sanitized errors
 - **Two transports:** stdio for local clients and authenticated Streamable HTTP
@@ -109,7 +110,8 @@ Important optional variables:
 | Variable | Default | Description |
 |---|---:|---|
 | `LIMESURVEY_AUTH_PLUGIN` | `Authdb` | LimeSurvey authentication plugin |
-| `LIMESURVEY_READ_ONLY` | `false` | Block every non-read-only MCP tool before an RPC call |
+| `LIMESURVEY_WRITE_SCOPE` | unset (= `outreach`, everything allowed) | `none`, `content`, `lifecycle`, or `outreach`; blocks every tool above the chosen level before any file read or RPC call (see [Write Safety](#write-safety)) |
+| `LIMESURVEY_READ_ONLY` | `false` | `true` equals `LIMESURVEY_WRITE_SCOPE=none`; when both are set the stricter level wins and a startup warning is printed |
 | `LIMESURVEY_TIMEOUT_MS` | `30000` | RemoteControl request timeout |
 | `LIMESURVEY_MAX_RESPONSE_CHARS` | `50000` | Maximum inline result size |
 | `LIMESURVEY_EXPORT_DIR` | unset | Dedicated output directory for decoded exports |
@@ -139,9 +141,12 @@ codex mcp add limesurvey `
   --env "LIMESURVEY_URL=https://survey.example.com/index.php/admin/remotecontrol" `
   --env "LIMESURVEY_USERNAME=rpc-user" `
   --env "LIMESURVEY_PASSWORD=replace-me" `
-  --env "LIMESURVEY_READ_ONLY=true" `
+  --env "LIMESURVEY_WRITE_SCOPE=content" `
   -- npx -y limesurvey-mcp-server@latest
 ```
+
+`content` lets an assistant build and correct surveys; use `none` for read-only
+access (see [Write Safety](#write-safety)).
 
 Example for clients that support `mcpServers` configuration:
 
@@ -155,7 +160,7 @@ Example for clients that support `mcpServers` configuration:
         "LIMESURVEY_URL": "https://survey.example.com/index.php/admin/remotecontrol",
         "LIMESURVEY_USERNAME": "rpc-user",
         "LIMESURVEY_PASSWORD": "replace-me",
-        "LIMESURVEY_READ_ONLY": "true",
+        "LIMESURVEY_WRITE_SCOPE": "content",
         "LIMESURVEY_THEME_DIR": "C:/limesurvey-mcp/themes"
       }
     }
@@ -188,9 +193,39 @@ TLS and configure Host and Origin allowlists when exposing the server remotely.
 
 ## Write Safety
 
-`LIMESURVEY_READ_ONLY=true` blocks all tools that are not annotated as read-only.
-The check is enforced by the server and cannot be bypassed through MCP tool
-arguments. Read tools remain available.
+`LIMESURVEY_WRITE_SCOPE` limits what the server may change. The scopes are
+cumulative, from narrowest to widest: `none` < `content` < `lifecycle` <
+`outreach`. A tool runs only when the configured scope is at least the tool's
+minimum scope. The check is enforced by the server before any file is read or
+any RemoteControl request is sent, and it cannot be bypassed through MCP tool
+arguments. A blocked call fails with the error code `WRITE_SCOPE_INSUFFICIENT`
+and names the current scope, the required scope, and which variable set it.
+Raise the scope deliberately and restart the MCP client completely; do not work
+around a block by calling the RemoteControl API directly.
+
+- Unset: everything is allowed (effective scope `outreach`, the historical default).
+- `LIMESURVEY_READ_ONLY=true` (or the legacy `READONLY_MODE=true`) equals `none`.
+- If both variables are set, the stricter level wins and the server prints a
+  startup warning naming both variables and the effective scope.
+- For building and correcting surveys, `content` is usually the right level.
+
+| Write scope | Tools |
+|---|---|
+| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
+| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme` |
+| `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
+| `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
+
+All 71 tools are listed (38 + 14 + 7 + 12). A tool that is missing from the
+server's scope table is treated as `outreach`. One call is argument-dependent:
+`limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
+because a `.lsa` archive activates the survey and imports participants and
+responses; `lss`, `csv`, and `txt` imports stay at `content`.
+
+`content` covers every survey setting that LimeSurvey lets
+`set_survey_properties` change, including start and expiry dates, notification
+and administrator addresses, and public registration. Choose `none` when an
+assistant should only read.
 
 Additional confirmation literals are required for high-impact actions:
 
@@ -284,8 +319,18 @@ that changing it requires a full restart.
 
 `limesurvey_get_instance_info` makes **no RemoteControl call** by default: it
 reports `server_version`, `instance_host` (host only, never credentials),
-`transport`, `read_only`, `experimental_methods_enabled`, per-directory
+`transport`, `read_only` (true only for write scope `none`), `write_scope` and
+`write_scope_source` (`default`, `LIMESURVEY_WRITE_SCOPE` or
+`LIMESURVEY_READ_ONLY`), `experimental_methods_enabled`, per-directory
 `{configured, path, exists, writable}` checks, and a `capabilities` summary.
+`capabilities` stays a map of booleans (`import_via_path`,
+`export_survey_to_file`, `list_installed_themes`, `theme_generation`,
+`theme_assignment`, `content_changes`, `lifecycle_changes`,
+`participant_outreach`, `file_exports`), computed after the write scope and
+the configured directories. `capability_blocked_by` has exactly the same keys
+and holds `null` when a capability is available, otherwise the reason (the
+required and current write scope with its source, and/or the missing environment
+variable; several reasons are joined with `; `).
 Set `probe_instance=true` to additionally call `list_surveys` (connectivity/
 auth proof, count only) and `get_site_settings("versionnumber")`, which
 requires a superadmin service account and degrades to

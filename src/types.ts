@@ -1,3 +1,5 @@
+import type { WriteScope, WriteScopeSource } from "./write-scope.js";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
@@ -21,6 +23,9 @@ export interface LimeSurveyConfig {
   timeoutMs: number;
   maxResponseChars: number;
   readOnly?: boolean;
+  writeScope?: WriteScope;
+  writeScopeSource?: WriteScopeSource;
+  writeScopeWarning?: string;
   enableExperimentalMethods?: boolean;
   exportDir?: string;
   maxExportBytes?: number;

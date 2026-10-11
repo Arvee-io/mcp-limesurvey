@@ -24,8 +24,13 @@ installation, set `target_limesurvey_major` explicitly to `6`.
 ```text
 LIMESURVEY_THEME_DIR=C:/limesurvey-mcp/themes
 LIMESURVEY_MAX_THEME_ASSET_BYTES=5242880
-LIMESURVEY_READ_ONLY=false
+LIMESURVEY_WRITE_SCOPE=content
 ```
+
+Theme generation, validation, and the publication guide work under every write
+scope (they only write into `LIMESURVEY_THEME_DIR`), including read-only mode;
+`limesurvey_assign_survey_theme` changes a survey and needs
+`LIMESURVEY_WRITE_SCOPE=content` or higher.
 
 The MCP process only needs write access to `LIMESURVEY_THEME_DIR`; it does not
 need direct access to the LimeSurvey filesystem. Docker uses the
