@@ -36,6 +36,8 @@ interface LiveQuestion {
   attributes: Record<string, string>;
   attributesLang: Record<string, Record<string, string>>;
   answers: Record<string, Record<string, string>>;
+  /** Scale per answer code for dual-scale questions (default 0). */
+  answerScales?: Record<string, number>;
 }
 
 interface LiveSubquestion {
@@ -95,11 +97,24 @@ function questionRow(question: LiveQuestion, language: string): Json {
   };
 }
 
+/**
+ * Mirrors get_question_properties of LimeSurvey 6.17.11: a dual-scale question (type 1) only accepts
+ * `answeroptions_multiscale`, every other question only `answeroptions`. Both are answered under the key
+ * `answeroptions`; the multiscale form is nested as { scale_id: { code: {...} } }. The other name is dropped silently.
+ */
 function properties(question: LiveQuestion, names: JsonValue, language: string): Json {
-  const answerOptions: Json = {};
+  const dualScale = question.type === "1";
+  const flat: Json = {};
+  const nested: Json = {};
   Object.entries(question.answers).forEach(([code, texts], index) => {
-    answerOptions[code] = { answer: texts[language] ?? "", assessment_value: 0, scale_id: 0, order: index };
+    const scale = question.answerScales?.[code] ?? 0;
+    const option = { answer: texts[language] ?? "", assessment_value: 0, scale_id: scale, order: index };
+    flat[code] = option;
+    const bucket = (nested[String(scale)] ?? {}) as Json;
+    bucket[code] = option;
+    nested[String(scale)] = bucket;
   });
+  const answerOptions = dualScale ? nested : flat;
   const all: Json = {
     title: question.title,
     question: question.text[language] ?? "",
@@ -115,11 +130,14 @@ function properties(question: LiveQuestion, names: JsonValue, language: string):
     answeroptions: Object.keys(answerOptions).length > 0 ? answerOptions : "No available answer options",
   };
   if (!Array.isArray(names)) return all;
-  return Object.fromEntries(names.filter((name): name is string => typeof name === "string" && name in all).map((name) => [name, all[name] as JsonValue]));
+  const allowed = names.filter(
+    (name): name is string => typeof name === "string" && (name === "answeroptions_multiscale" ? dualScale : name === "answeroptions" ? !dualScale : name in all),
+  );
+  return Object.fromEntries(allowed.map((name) => [name === "answeroptions_multiscale" ? "answeroptions" : name, all[name === "answeroptions_multiscale" ? "answeroptions" : name] as JsonValue]));
 }
 
 /** Read-only mock of the RemoteControl methods the verification may use. Any other method fails the test. */
-function liveFetch(live: Live, requests: JsonRpcRequest[], baseLanguage = "en"): typeof fetch {
+function liveFetch(live: Live, requests: JsonRpcRequest[], baseLanguage = "en", denySurveySettings = false): typeof fetch {
   return async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
     requests.push(request);
@@ -130,7 +148,8 @@ function liveFetch(live: Live, requests: JsonRpcRequest[], baseLanguage = "en"):
         result = "session-1";
         break;
       case "get_survey_properties":
-        result = { language: baseLanguage };
+        // surveysettings/read is a separate permission from surveycontent/read.
+        result = denySurveySettings ? { status: "No permission" } : { language: baseLanguage };
         break;
       case "list_groups": {
         const language = typeof params[1] === "string" ? params[1] : baseLanguage;
@@ -251,9 +270,80 @@ test("[S-10] an identical live survey has no differences and only read RPCs are 
   const methods = requests.map((request) => request.method);
   assert.deepEqual(
     [...new Set(methods)].sort(),
-    ["get_question_properties", "get_session_key", "get_survey_properties", "list_groups", "list_questions"],
+    ["get_question_properties", "get_session_key", "list_groups", "list_questions"],
   );
   assert.equal(methods.filter((method) => method === "get_question_properties").length, 3);
+});
+
+test("[S-10] without a language the base language comes from list_groups and survey settings permission is not needed", async () => {
+  const requests: JsonRpcRequest[] = [];
+  const dir = await importDirWith();
+  try {
+    await withTool({ ...baseConfig, importDir: dir }, liveFetch(sampleLive(), requests, "en", true), async (call) => {
+      const response = await call({ survey_id: 555, lss_path: "sample.lss" });
+      assert.equal(response.isError, undefined, JSON.stringify(response));
+      const report = reportOf(response.structured);
+      assert.equal(report.language, "en");
+      assert.deepEqual(report.differences, []);
+    });
+    assert.equal(requests.some((request) => request.method === "get_survey_properties"), false);
+    const groupsCall = requests.find((request) => request.method === "list_groups");
+    assert.equal(groupsCall?.params[2], null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("[S-10] a live base language that differs from the file's default re-reads the file in that language", async () => {
+  const dir = await importDirWith();
+  try {
+    await withTool({ ...baseConfig, importDir: dir }, liveFetch(sampleLive(), [], "de"), async (call) => {
+      const response = await call({ survey_id: 555, lss_path: "sample.lss" });
+      assert.equal(response.isError, undefined, JSON.stringify(response));
+      const report = reportOf(response.structured);
+      assert.equal(report.language, "de");
+      assert.deepEqual(report.differences, []);
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("[S-10] answer options of a dual-scale question (type 1) on both scales are compared without false findings", async () => {
+  const sample = await readFile(fixturePath, "utf8");
+  // Q1 becomes a dual-scale question: A1 stays on scale 0, A2 moves to scale 1.
+  const lss = sample
+    .replace("<type><![CDATA[L]]></type>", "<type><![CDATA[1]]></type>")
+    .replace(/(<code><!\[CDATA\[A2\]\]><\/code>[\s\S]*?<scale_id><!\[CDATA\[)0/, "$11");
+  assert.notEqual(lss, sample);
+  const live = sampleLive();
+  const q1 = live.questions[0] as LiveQuestion;
+  q1.type = "1";
+  q1.answerScales = { A1: 0, A2: 1 };
+  const { response, requests } = await verify(live, {}, lss);
+  assert.equal(response.isError, undefined, JSON.stringify(response));
+  const report = reportOf(response.structured);
+  assert.deepEqual(report.differences, [], JSON.stringify(report.differences));
+  assert.equal((report.summary.answers as { live: number }).live, 4);
+  const q1Call = requests.find((request) => request.method === "get_question_properties" && request.params[1] === 801);
+  assert.ok((q1Call?.params[2] as string[]).includes("answeroptions_multiscale"));
+});
+
+test("[S-10] a differing answer on the second scale of a dual-scale question is still reported", async () => {
+  const sample = await readFile(fixturePath, "utf8");
+  const lss = sample
+    .replace("<type><![CDATA[L]]></type>", "<type><![CDATA[1]]></type>")
+    .replace(/(<code><!\[CDATA\[A2\]\]><\/code>[\s\S]*?<scale_id><!\[CDATA\[)0/, "$11");
+  const live = sampleLive();
+  const q1 = live.questions[0] as LiveQuestion;
+  q1.type = "1";
+  q1.answerScales = { A1: 0, A2: 1 };
+  q1.answers.A2 = { en: "Nope", de: "Nein" };
+  const { response } = await verify(live, {}, lss);
+  const report = reportOf(response.structured);
+  assert.equal(report.differences.length, 1, JSON.stringify(report.differences));
+  assert.equal(report.differences[0]?.kind, "answer_field");
+  assert.equal(report.differences[0]?.item, "A2 (scale 1)");
 });
 
 test("[S-10] a changed text, a changed attribute, a missing answer and an extra question are reported", async () => {
