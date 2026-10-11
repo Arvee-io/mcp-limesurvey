@@ -55,6 +55,16 @@ const ROW_ATTRIBUTES = ["emailstatus", "sent", "completed", "validfrom", "validu
 const BORDERLINE_MINUTES = 60;
 /** LimeSurvey's config-defaults.php value; the real value is only readable by super administrators. */
 const DEFAULT_MAX_EMAILS = 50;
+/** The dry run report lists at most this many entries per list; counts always carry the full numbers. */
+const LIST_CAP = 100;
+/** Cap for the secondary lists (warnings, borderline) of the dry run report. */
+const SECONDARY_CAP = 25;
+
+function capList<T>(items: T[], cap: number): { items: T[]; cut: { returned: number; total: number } | null } {
+  return items.length > cap
+    ? { items: items.slice(0, cap), cut: { returned: cap, total: items.length } }
+    : { items, cut: null };
+}
 
 /**
  * Pattern of invite_participants (taken there from PHP's php_filter_validate_email) applied to every address of
@@ -266,21 +276,58 @@ export async function validateParticipants(
   client: LimeSurveyClient,
   surveyId: number,
   offsetParameter: number | undefined,
+  maxResponseChars: number = Number.POSITIVE_INFINITY,
 ): Promise<JsonValue> {
   const list = await fetchParticipants(client, surveyId);
   const time = resolveTime(client, offsetParameter);
   const { issues, borderline } = checkRows(list.rows, time);
-  return {
+  const base: JsonObject = {
     survey_id: surveyId,
     participant_table_exists: list.exists,
     participant_count: list.rows.length,
     server_time_utc: time.basis.server_time_utc as string,
     time_basis: time.basis,
-    issues: issues as unknown as JsonValue,
     counts_by_code: countBy(issues.map((issue) => issue.code)),
-    borderline: borderline as unknown as JsonValue,
     ...(list.truncated ? { truncated: true, truncation_note: `Only the first ${MAX_PAGES * PAGE_SIZE} participants were checked.` } : {}),
     ...(list.exists ? {} : { note: "The survey has no participant table (limesurvey_activate_tokens creates it)." }),
+  };
+  const full: JsonObject = { ...base, issues: issues as unknown as JsonValue, borderline: borderline as unknown as JsonValue };
+  if (JSON.stringify(full).length <= maxResponseChars) return full;
+
+  // Too large for LIMESURVEY_MAX_RESPONSE_CHARS: keep the complete counts and cut issues and borderline to fit.
+  const note = `The issue list was cut to stay within LIMESURVEY_MAX_RESPONSE_CHARS (${maxResponseChars}); counts_by_code, participant_count and time_basis are complete. `
+    + "Fix the most frequent codes and run the check again, or raise LIMESURVEY_MAX_RESPONSE_CHARS.";
+  const overhead = JSON.stringify({
+    ...base,
+    issues: [], borderline: [], issues_truncated: true, issues_total: issues.length, issues_returned: issues.length,
+    borderline_truncated: true, borderline_total: borderline.length, borderline_returned: borderline.length,
+    truncation_note: note,
+  }).length;
+  const budget = Math.max(0, maxResponseChars - overhead);
+  const take = <T>(items: T[], allowed: number): T[] => {
+    const kept: T[] = [];
+    let used = 0;
+    for (const item of items) {
+      used += JSON.stringify(item).length + 1;
+      if (used > allowed) break;
+      kept.push(item);
+    }
+    return kept;
+  };
+  const keptIssues = take(issues, Math.floor(budget * 0.8));
+  const usedByIssues = keptIssues.reduce((sum, item) => sum + JSON.stringify(item).length + 1, 0);
+  const keptBorderline = take(borderline, budget - usedByIssues);
+  return {
+    ...base,
+    issues: keptIssues as unknown as JsonValue,
+    borderline: keptBorderline as unknown as JsonValue,
+    ...(keptIssues.length < issues.length ? { issues_truncated: true } : {}),
+    issues_total: issues.length,
+    issues_returned: keptIssues.length,
+    ...(keptBorderline.length < borderline.length ? { borderline_truncated: true } : {}),
+    borderline_total: borderline.length,
+    borderline_returned: keptBorderline.length,
+    truncation_note: typeof base.truncation_note === "string" ? `${base.truncation_note} ${note}` : note,
   };
 }
 
@@ -331,6 +378,7 @@ export async function previewInvitation(input: Record<string, unknown>, client: 
   const time = resolveTime(client, offsetParameter);
   const selectedSet = selected ? new Set(selected) : null;
 
+  let notSelected = 0;
   const notReceiving = new Map<number, { row: ParticipantRow; reasons: string[]; details: JsonObject }>();
   const reject = (row: ParticipantRow, reason: string, detail?: JsonObject) => {
     const entry = notReceiving.get(row.tid) ?? { row, reasons: [], details: {} };
@@ -342,6 +390,11 @@ export async function previewInvitation(input: Record<string, unknown>, client: 
   // 1. The SQL conditions of TokenDynamic::findUninvited.
   const eligible: ParticipantRow[] = [];
   for (const row of list.rows) {
+    // Not a candidate at all (the SQL filters tid IN token_ids): counted, never listed per row.
+    if (selectedSet && !selectedSet.has(row.tid)) {
+      notSelected += 1;
+      continue;
+    }
     let rejected = false;
     const fail = (reason: string, detail?: JsonObject) => {
       rejected = true;
@@ -354,7 +407,6 @@ export async function previewInvitation(input: Record<string, unknown>, client: 
     if (sendEmail && invited) fail("already_invited", { sent: row.sent });
     if (!sendEmail && !invited) fail("not_invited_yet");
     if (row.emailstatus !== "OK") fail("emailstatus_not_ok", { emailstatus: row.emailstatus });
-    if (selectedSet && !selectedSet.has(row.tid)) fail("not_selected");
     if (!rejected) eligible.push(row);
   }
 
@@ -398,11 +450,11 @@ export async function previewInvitation(input: Record<string, unknown>, client: 
 
   const checks = checkRows(list.rows, time);
   const receivingTids = new Set(would.map((row) => row.tid));
-  const warnings: JsonValue[] = checks.issues
+  const allWarnings: JsonValue[] = checks.issues
     .filter((issue) => receivingTids.has(issue.tid) && ["WHITESPACE", "DUPLICATE_EMAIL", "DUPLICATE_TOKEN"].includes(issue.code))
     .map((issue) => ({ ...issue }));
   if (maxEmails === null && eligible.length > DEFAULT_MAX_EMAILS) {
-    warnings.push({
+    allWarnings.unshift({
       code: "MAXEMAILS_UNKNOWN",
       detail: `${eligible.length} participants qualify, but one invite_participants call sends at most maxemails (LimeSurvey default ${DEFAULT_MAX_EMAILS}, readable only by super administrators). The real value is unknown, so all qualifying participants are listed under would_receive; further calls would be needed beyond the limit.`,
     });
@@ -411,6 +463,18 @@ export async function previewInvitation(input: Record<string, unknown>, client: 
   const wouldNotReceive = [...notReceiving.values()]
     .sort((a, b) => a.row.tid - b.row.tid)
     .map(({ row, reasons, details }) => ({ tid: row.tid, email: row.email, reasons, ...(Object.keys(details).length > 0 ? { details } : {}) }));
+  const warnings = capList(allWarnings, SECONDARY_CAP);
+  const borderlineEntries = capList(checks.borderline, SECONDARY_CAP);
+  const wouldList = capList(would, LIST_CAP);
+  const notReceivingList = capList(wouldNotReceive, LIST_CAP);
+  const notReachedList = capList(notReached, LIST_CAP);
+  const truncatedLists: JsonObject = {};
+  for (const [name, cut] of [
+    ["would_receive", wouldList.cut], ["would_not_receive", notReceivingList.cut], ["not_reached", notReachedList.cut],
+    ["warnings", warnings.cut], ["borderline", borderlineEntries.cut],
+  ] as const) {
+    if (cut) truncatedLists[name] = { ...cut };
+  }
   const empty = eligible.length === 0 || addressed.length === 0;
 
   const limitations = [
@@ -431,23 +495,33 @@ export async function previewInvitation(input: Record<string, unknown>, client: 
     continue_on_error: continueOnError,
     participant_table_exists: true,
     participant_count: list.rows.length,
-    would_receive: would.map((row) => ({ tid: row.tid, email: row.email, firstname: row.firstname, lastname: row.lastname })),
-    would_not_receive: wouldNotReceive as unknown as JsonValue,
+    would_receive: wouldList.items.map((row) => ({ tid: row.tid, email: row.email, firstname: row.firstname, lastname: row.lastname })),
+    would_not_receive: notReceivingList.items as unknown as JsonValue,
     stops_at_tid: stopsAtTid,
-    not_reached: notReached.map((row) => ({ tid: row.tid, email: row.email })),
+    not_reached: notReachedList.items.map((row) => ({ tid: row.tid, email: row.email })),
     real_call_would_fail_with: empty ? "Error: No candidate tokens" : null,
     counts: {
       would_receive: would.length,
       would_not_receive: wouldNotReceive.length,
       not_reached: notReached.length,
-      by_reason: countBy(wouldNotReceive.flatMap((entry) => entry.reasons)),
+      not_selected: notSelected,
+      by_reason: {
+        ...countBy(wouldNotReceive.flatMap((entry) => entry.reasons)),
+        ...(notSelected > 0 ? { not_selected: notSelected } : {}),
+      },
     },
+    ...(Object.keys(truncatedLists).length > 0
+      ? {
+        truncated_lists: truncatedLists,
+        truncated_lists_note: `Each list shows at most ${LIST_CAP} entries (warnings and borderline ${SECONDARY_CAP}) so the report stays within LIMESURVEY_MAX_RESPONSE_CHARS; counts hold the full numbers. Use token_ids to check specific participants.`,
+      }
+      : {}),
     max_emails: maxEmails !== null
       ? { value: maxEmails, known: true }
       : { value: DEFAULT_MAX_EMAILS, known: false, assumption: "LimeSurvey default; not applied to the lists above" },
     time_basis: time.basis,
-    borderline: checks.borderline as unknown as JsonValue,
-    warnings,
+    borderline: borderlineEntries.items as unknown as JsonValue,
+    warnings: warnings.items,
     limitations,
     ...(list.truncated ? { truncated: true, truncation_note: `Only the first ${MAX_PAGES * PAGE_SIZE} participants were read.` } : {}),
   };

@@ -485,7 +485,10 @@ export const toolDefinitions: ToolDefinition[] = [
       "would_receive and would_not_receive with a reason for every participant who is skipped (completed, " +
       "already_invited, emailstatus_not_ok, invalid_email_address, not_valid_yet, expired, ...). Without " +
       "continue_on_error LimeSurvey stops at the first participant whose validity window fails; the preview names " +
-      "that participant as stops_at_tid. send_email=false is NOT a dry run: it resends the invitation to those who " +
+      "that participant as stops_at_tid. The report stays within LIMESURVEY_MAX_RESPONSE_CHARS regardless of the " +
+      "table size: unselected participants (token_ids) are only counted as not_selected, and would_receive, " +
+      "would_not_receive and not_reached list at most 100 entries each (truncated_lists says which were cut, " +
+      "counts hold the full numbers). send_email=false is NOT a dry run: it resends the invitation to those who " +
       "were already invited. Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
     "write",
     [

@@ -428,13 +428,15 @@ export function registerWorkflowTools(
         + "INVALID_VALIDITY_RANGE, EMAILSTATUS_NOT_OK, MISSING_EMAIL, MISSING_TOKEN). The server time is the HTTP Date "
         + "header of the LimeSurvey answer; validfrom/validuntil are read in the server's local time, whose UTC "
         + "offset is server_utc_offset_minutes or, without it, the timezone of the MCP host (time_basis says which). "
-        + "Entries within 60 minutes of the current time are listed under borderline. Uses only list_participants.",
+        + "Entries within 60 minutes of the current time are listed under borderline. Uses only list_participants. "
+        + "The answer stays within LIMESURVEY_MAX_RESPONSE_CHARS: with too many issues, issues and borderline are cut "
+        + "(issues_truncated, issues_total) while counts_by_code stays complete.",
       inputSchema: strictInput({ survey_id: surveyId, server_utc_offset_minutes: serverUtcOffsetSchema }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ survey_id, server_utc_offset_minutes }) => run(config, "validate_participants",
-      () => validateParticipants(client, survey_id, server_utc_offset_minutes)),
+      () => validateParticipants(client, survey_id, server_utc_offset_minutes, config.maxResponseChars)),
   );
 
   server.registerTool(
