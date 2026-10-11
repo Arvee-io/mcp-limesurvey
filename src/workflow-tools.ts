@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
+import { strictInput } from "./input-schema.js";
 import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
 import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
@@ -241,11 +242,11 @@ export function registerWorkflowTools(
     {
       title: "Find surveys",
       description: "Find visible surveys by ID or title with bounded client-side pagination.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         query: z.string().default("").describe("Case-insensitive survey ID or title fragment."),
         offset: z.number().int().nonnegative().default(0),
         limit: z.number().int().positive().max(100).default(20),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -269,7 +270,7 @@ export function registerWorkflowTools(
     {
       title: "Get survey languages",
       description: "Return the base and additional language codes configured for a survey.",
-      inputSchema: z.object({ survey_id: surveyId }).strict(),
+      inputSchema: strictInput({ survey_id: surveyId }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -293,11 +294,11 @@ export function registerWorkflowTools(
     {
       title: "Add one survey participant",
       description: "Add one participant using a simple participant object.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         participant: z.record(z.string(), jsonValueSchema).describe("Participant fields such as email, firstname, lastname, token, and attributes."),
         create_token: z.boolean().default(true),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -310,14 +311,14 @@ export function registerWorkflowTools(
     {
       title: "List filtered participants",
       description: "List participant rows with explicit filters, selected fields, and bounded pagination.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         conditions: z.record(z.string(), jsonValueSchema).default({}),
         attributes: z.union([z.literal(false), z.array(z.string())]).default(false),
         unused: z.boolean().default(false),
         offset: z.number().int().nonnegative().default(0),
         limit: z.number().int().positive().max(1000).default(100),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -337,7 +338,7 @@ export function registerWorkflowTools(
         + "(closed_access_basis names which). The survey property usetokens is NOT evaluated by LimeSurvey 6.17.11 "
         + "and is not used here. A survey without a participant table has open access. "
         + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
-      inputSchema: z.object({ survey_id: surveyId }).strict(),
+      inputSchema: strictInput({ survey_id: surveyId }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -418,7 +419,7 @@ export function registerWorkflowTools(
     {
       title: "List response export formats",
       description: "Call the optional list_response_exports LimeSurvey extension to discover plugin-aware export formats.",
-      inputSchema: z.object({}).strict(),
+      inputSchema: strictInput({}),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -437,7 +438,7 @@ export function registerWorkflowTools(
     {
       title: "Export responses to a file",
       description: "Export responses and securely decode the base64 result inside LIMESURVEY_EXPORT_DIR.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.string().min(1),
         language_code: optionalLanguage.default(null),
@@ -449,7 +450,7 @@ export function registerWorkflowTools(
         fields: z.array(z.string()).nullable().default(null),
         additional_options: z.record(z.string(), jsonValueSchema).nullable().default(null),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -465,7 +466,7 @@ export function registerWorkflowTools(
     {
       title: "Export token responses to a file",
       description: "Export responses for selected tokens and securely decode the result inside LIMESURVEY_EXPORT_DIR.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.string().min(1),
         tokens: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
@@ -475,7 +476,7 @@ export function registerWorkflowTools(
         response_type: z.enum(["short", "long"]).default("short"),
         fields: z.array(z.string()).nullable().default(null),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -491,14 +492,14 @@ export function registerWorkflowTools(
     {
       title: "Export statistics to a file",
       description: "Export survey statistics and securely decode the result inside LIMESURVEY_EXPORT_DIR.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.enum(["pdf", "xls", "html"]).default("pdf"),
         language: optionalLanguage.default(null),
         include_graphs: z.enum(["0", "1"]).default("0"),
         group_ids: z.union([z.number().int().positive(), z.array(z.number().int().positive())]).nullable().default(null),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -523,10 +524,10 @@ export function registerWorkflowTools(
         + "get_site_settings(\"versionnumber\") — the latter requires a superadmin service account and degrades to "
         + "permission_level=\"standard\" with instance_version=null otherwise. Call this before relying on file "
         + "export/import or theming tools.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         probe_instance: z.boolean().default(false)
           .describe("Also call list_surveys and get_site_settings to probe live connectivity, auth, and version/permission level."),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -608,11 +609,11 @@ export function registerWorkflowTools(
         + "true and otherwise always fails with a clear EXPORT_UNSUPPORTED error. Prefer property-based "
         + "verification (list_groups, list_questions, get_survey_properties, get_group_properties, "
         + "get_question_properties) over round-trip diffing.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.literal("lss").default("lss").describe("Structure export format."),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },

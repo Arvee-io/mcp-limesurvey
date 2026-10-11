@@ -277,6 +277,14 @@ differ):
 Each `set_*_properties` tool description lists its writable and non-writable
 fields.
 
+Argument errors are explicit: an unknown argument fails with
+`Unknown argument: <names>. This tool accepts: <parameters>.` for every tool.
+`limesurvey_get_group_properties` and `limesurvey_get_question_properties`
+accept an optional MCP-only `survey_id` (never sent to LimeSurvey, whose
+methods take no survey ID): the result's `sid` must match, otherwise the call
+fails with `GROUP_SURVEY_MISMATCH` or `QUESTION_SURVEY_MISMATCH` instead of
+silently returning another survey's object.
+
 `limesurvey_get_participant_table_status` answers "does this survey have a
 participant table, and is access closed?" without guessing: `exists` and
 `participant_count` come from `get_summary(token_count)`, and

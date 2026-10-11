@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
+import { strictInput } from "./input-schema.js";
 import { describeWriteSpec, prepareWriteInput, writeWarnings } from "./rpc-hints.js";
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 
@@ -94,7 +95,7 @@ function define(
     method,
     title,
     description: `${summary}${confirmation}\n\nCalls LimeSurvey RemoteControl method \`${method}\`. Authentication uses the configured service account; do not provide a session key.`,
-    inputSchema: z.object(shape).strict(),
+    inputSchema: strictInput(shape),
     parameters,
     ...(options.prepare ? { prepare: options.prepare } : {}),
     ...(options.afterCall ? { afterCall: options.afterCall } : {}),
@@ -119,6 +120,59 @@ function writeChecks(method: string): Pick<NonNullable<Parameters<typeof define>
   return {
     prepare: (input) => prepareWriteInput(method, input),
     afterCall: async (result, input) => writeWarnings(method, result, input),
+  };
+}
+
+const surveyIdCheckSchema = (resource: string) =>
+  z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      `Optional survey ID the ${resource} is expected to belong to. MCP-only: it is never sent to LimeSurvey; the server ` +
+        `compares it with the sid of the result (reading sid with one extra request when the result has none) and fails ` +
+        `with a *_SURVEY_MISMATCH error when they differ.`,
+    );
+
+/**
+ * afterCall hook for get_group_properties and get_question_properties: neither RPC takes a survey ID, so a wrong
+ * ID silently reads another survey's object. When survey_id is given, compare it with the object's sid.
+ */
+function surveyIdCrossCheck(
+  method: "get_group_properties" | "get_question_properties",
+  idKey: "group_id" | "question_id",
+  mismatchCode: "GROUP_SURVEY_MISMATCH" | "QUESTION_SURVEY_MISMATCH",
+  label: string,
+): NonNullable<ToolDefinition["afterCall"]> {
+  return async (result, input, client) => {
+    const expected = input.survey_id;
+    if (typeof expected !== "number") return undefined;
+    const sidOf = (value: JsonValue): JsonValue | undefined =>
+      value !== null && typeof value === "object" && !Array.isArray(value) ? value.sid : undefined;
+    let actual = sidOf(result);
+    if (actual === undefined || actual === null) {
+      actual = sidOf(await client.call(method, [input[idKey] as JsonValue, ["sid"]]));
+    }
+    if (actual === undefined || actual === null || String(actual).trim() === "") {
+      return [{
+        hint_code: "SURVEY_ID_NOT_VERIFIED",
+        hint: `LimeSurvey returned no sid for this ${label}, so survey_id=${expected} could not be verified.`,
+      }];
+    }
+    if (Number(actual) !== expected) {
+      throw new LimeSurveyError(
+        `The ${label} ${String(input[idKey])} belongs to survey ${String(actual)}, not to survey ${expected}.`,
+        mismatchCode,
+        { [idKey]: input[idKey] as JsonValue, expected_survey_id: expected, actual_survey_id: actual },
+        {
+          hint_code: mismatchCode,
+          hint: `${label === "group" ? "Group" : "Question"} ${String(input[idKey])} is in survey ${String(actual)}, but survey_id=${expected} was expected. ` +
+            `The result was discarded; look up the correct ${idKey} with limesurvey_list_${label === "group" ? "groups" : "questions"} for survey ${expected}.`,
+        },
+      );
+    }
+    return undefined;
   };
 }
 
@@ -317,7 +371,19 @@ export const toolDefinitions: ToolDefinition[] = [
     ],
     { prepare: prepareImportData, extraSchema: { import_data_path: importDataPathSchema("question group") } },
   ),
-  define("get_group_properties", "Get group properties", "Read selected question-group properties.", "read", [groupId(), propertyNames("properties", "question group"), language()]),
+  define(
+    "get_group_properties",
+    "Get group properties",
+    "Read selected question-group properties. LimeSurvey identifies the group by group_id alone, so a wrong ID reads " +
+      "another survey's group. Pass the optional survey_id to cross-check: the result's sid must match, otherwise the " +
+      "call fails with GROUP_SURVEY_MISMATCH (survey_id is never sent to LimeSurvey).",
+    "read",
+    [groupId(), propertyNames("properties", "question group"), language()],
+    {
+      extraSchema: { survey_id: surveyIdCheckSchema("group") },
+      afterCall: surveyIdCrossCheck("get_group_properties", "group_id", "GROUP_SURVEY_MISMATCH", "group"),
+    },
+  ),
   define("set_group_properties", "Set group properties", `Update question-group properties.${describeWriteSpec("set_group_properties")}`, "write", [groupId(), p("data", jsonObject("Group property names mapped to new values."))], writeChecks("set_group_properties")),
 
   define("delete_question", "Delete question", "Delete a question from its survey.", "delete", [questionId()]),
@@ -338,7 +404,19 @@ export const toolDefinitions: ToolDefinition[] = [
     ],
     { prepare: prepareImportData, extraSchema: { import_data_path: importDataPathSchema("question") } },
   ),
-  define("get_question_properties", "Get question properties", "Read selected question properties.", "read", [questionId(), propertyNames("properties", "question"), language()]),
+  define(
+    "get_question_properties",
+    "Get question properties",
+    "Read selected question properties. LimeSurvey identifies the question by question_id alone, so a wrong ID reads " +
+      "another survey's question. Pass the optional survey_id to cross-check: the result's sid must match, otherwise the " +
+      "call fails with QUESTION_SURVEY_MISMATCH (survey_id is never sent to LimeSurvey).",
+    "read",
+    [questionId(), propertyNames("properties", "question"), language()],
+    {
+      extraSchema: { survey_id: surveyIdCheckSchema("question") },
+      afterCall: surveyIdCrossCheck("get_question_properties", "question_id", "QUESTION_SURVEY_MISMATCH", "question"),
+    },
+  ),
   define("set_question_properties", "Set question properties", `Update question properties.${describeWriteSpec("set_question_properties")}`, "write", [questionId(), p("data", jsonObject("Question property names mapped to new values.")), language()], writeChecks("set_question_properties")),
 
   define("activate_tokens", "Activate participant table", "Create the survey participant table and optional custom attributes.", "write", [surveyId(), p("attribute_fields", z.array(z.number().int().positive()).optional().describe("Additional participant attribute field numbers."), [])]),

@@ -60,6 +60,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `get_summary` answers "No available data" with `NO_PARTICIPANT_TABLE`
   (`token_*` statistics, open access) or `NO_RESPONSE_TABLE` (never activated).
 
+- Optional MCP-only `survey_id` for `get_group_properties` and
+  `get_question_properties` (never sent to LimeSurvey): the server compares it
+  with the result's `sid` (one extra read when the result has none) and fails
+  with `GROUP_SURVEY_MISMATCH` / `QUESTION_SURVEY_MISMATCH`, based on user
+  feedback about reading another survey's object by a wrong ID. Tool
+  definitions gained an optional `afterCall` hook for this.
+- Unknown tool arguments now fail with `Unknown argument: <names>. This tool
+  accepts: <parameters>.` for official, workflow, and theme tools (new
+  `src/input-schema.ts`); other validation messages are unchanged.
+
 ### Changed
 
 - `set_group_properties` with `group_name` or `description` now needs a
