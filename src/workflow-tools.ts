@@ -8,7 +8,8 @@ import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
 import { strictInput } from "./input-schema.js";
 import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
-import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
+import { validateParticipants } from "./participant-checks.js";
+import { buildRpcParams, jsonValueSchema, serverUtcOffsetSchema, toolDefinitions } from "./tool-definitions.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
@@ -316,7 +317,8 @@ export function registerWorkflowTools(
         conditions: z.record(z.string(), jsonValueSchema).default({}),
         attributes: z.union([z.literal(false), z.array(z.string())]).default(false),
         unused: z.boolean().default(false),
-        offset: z.number().int().nonnegative().default(0),
+        offset: z.number().int().nonnegative().default(0)
+          .describe("Passed to LimeSurvey as list_participants start: a lower bound for the participant row ID (tid >= offset), not a row offset. Page with the last tid + 1."),
         limit: z.number().int().positive().max(1000).default(100),
       }),
       outputSchema,
@@ -412,6 +414,30 @@ export function registerWorkflowTools(
           + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
       };
     }),
+  );
+
+  server.registerTool(
+    "limesurvey_validate_participants",
+    {
+      title: "Validate survey participants",
+      description: "Read-only check of the whole participant table before an invitation run: leading/trailing "
+        + "whitespace (email, firstname, lastname, token), duplicate email addresses (trimmed, case-insensitive) and "
+        + "tokens, address format (every address of a comma/semicolon list, with the pattern LimeSurvey's "
+        + "invite_participants uses), validfrom/validuntil against the server time, validfrom after validuntil, "
+        + "emailstatus other than OK, and missing email or token. Returns issues [{tid, field, code, detail}] and "
+        + "counts_by_code (codes WHITESPACE, DUPLICATE_EMAIL, DUPLICATE_TOKEN, INVALID_EMAIL, NOT_YET_VALID, EXPIRED, "
+        + "INVALID_VALIDITY_RANGE, EMAILSTATUS_NOT_OK, MISSING_EMAIL, MISSING_TOKEN). The server time is the HTTP Date "
+        + "header of the LimeSurvey answer; validfrom/validuntil are read in the server's local time, whose UTC "
+        + "offset is server_utc_offset_minutes or, without it, the timezone of the MCP host (time_basis says which). "
+        + "Entries within 60 minutes of the current time are listed under borderline. Uses only list_participants. "
+        + "The answer stays within LIMESURVEY_MAX_RESPONSE_CHARS: with too many issues, issues and borderline are cut "
+        + "(issues_truncated, issues_total) while counts_by_code stays complete.",
+      inputSchema: strictInput({ survey_id: surveyId, server_utc_offset_minutes: serverUtcOffsetSchema }),
+      outputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ survey_id, server_utc_offset_minutes }) => run(config, "validate_participants",
+      () => validateParticipants(client, survey_id, server_utc_offset_minutes, config.maxResponseChars)),
   );
 
   server.registerTool(
@@ -515,7 +541,7 @@ export function registerWorkflowTools(
     {
       title: "Get MCP server and LimeSurvey capability info",
       description: "Report server-side configuration without any RemoteControl call by default: server_version, "
-        + "instance_host, transport, read_only (true only for write scope none), write_scope and "
+        + "instance_host, password_source (file or env, never the path or the content), transport, read_only (true only for write scope none), write_scope and "
         + "write_scope_source, experimental_methods_enabled, configured export/import/theme directories (each "
         + "with a local exists/writable check), and a capabilities summary. capabilities are booleans computed "
         + "after the write scope and the configuration; capability_blocked_by has the same keys and holds null "
@@ -542,6 +568,7 @@ export function registerWorkflowTools(
       const base: Record<string, JsonValue> = {
         server_version: SERVER_VERSION,
         instance_host: config.url.host,
+        password_source: config.passwordSource ?? "env",
         transport: config.transport ?? "stdio",
         read_only: scope === "none",
         write_scope: scope,

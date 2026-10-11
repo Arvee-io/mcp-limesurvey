@@ -19,6 +19,10 @@ export interface LimeSurveyConfig {
   url: URL;
   username: string;
   password: string;
+  /** Where the password came from; reported by get_instance_info, never with path or content. */
+  passwordSource?: "file" | "env";
+  /** Start-up warnings about the password configuration (names and paths only, never the password). */
+  passwordWarnings?: string[];
   authPlugin: string;
   timeoutMs: number;
   maxResponseChars: number;

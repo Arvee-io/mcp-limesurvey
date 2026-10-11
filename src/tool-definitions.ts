@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { strictInput } from "./input-schema.js";
+import { previewInvitation } from "./participant-checks.js";
 import { describeWriteSpec, prepareWriteInput, writeWarnings } from "./rpc-hints.js";
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 
@@ -26,6 +27,11 @@ export interface ToolDefinition {
    * LimeSurveyError to turn the answer into an error.
    */
   afterCall?: (result: JsonValue, input: Record<string, unknown>, client: LimeSurveyClient) => Promise<JsonValue[] | undefined>;
+  /**
+   * Runs after the write-scope check and prepare, before the RPC. A returned value is the tool result and the
+   * RPC (and afterCall) is skipped; undefined continues with the RPC.
+   */
+  override?: (input: Record<string, unknown>, client: LimeSurveyClient, config: LimeSurveyConfig) => Promise<JsonValue | undefined>;
   annotations: {
     readOnlyHint: boolean;
     destructiveHint: boolean;
@@ -72,6 +78,7 @@ function define(
   options: {
     prepare?: ToolDefinition["prepare"];
     afterCall?: ToolDefinition["afterCall"];
+    override?: ToolDefinition["override"];
     extraSchema?: Record<string, z.ZodTypeAny>;
   } = {},
 ): ToolDefinition {
@@ -81,10 +88,16 @@ function define(
     for (const [key, schema] of Object.entries(options.extraSchema)) shape[key] = schema;
   }
   let confirmation = "";
+  let dryRunPreview = false;
   if (access === "delete") {
     shape.confirm_destructive_action = z.literal(true).describe("Required acknowledgement of the permanent deletion.");
     confirmation = " Requires confirm_destructive_action=true.";
-  } else if (["mail_registered_participants", "invite_participants", "remind_participants"].includes(method)) {
+  } else if (method === "invite_participants") {
+    // A dry run sends nothing, so only a real invitation needs the acknowledgement (checked below).
+    shape.confirm_send_email = z.literal(true).optional().describe("Required acknowledgement that email may be sent to participants; not needed with dry_run=true.");
+    confirmation = " Requires confirm_send_email=true unless dry_run=true.";
+    dryRunPreview = true;
+  } else if (["mail_registered_participants", "remind_participants"].includes(method)) {
     shape.confirm_send_email = z.literal(true).describe("Required acknowledgement that email may be sent to participants.");
     confirmation = " Requires confirm_send_email=true.";
   } else if (method === "activate_survey") {
@@ -95,10 +108,21 @@ function define(
     method,
     title,
     description: `${summary}${confirmation}\n\nCalls LimeSurvey RemoteControl method \`${method}\`. Authentication uses the configured service account; do not provide a session key.`,
-    inputSchema: strictInput(shape),
+    inputSchema: dryRunPreview
+      ? strictInput(shape).superRefine((value, context) => {
+        if (value.dry_run !== true && value.confirm_send_email !== true) {
+          context.addIssue({
+            code: "custom",
+            path: ["confirm_send_email"],
+            message: "confirm_send_email=true is required unless dry_run=true.",
+          });
+        }
+      })
+      : strictInput(shape),
     parameters,
     ...(options.prepare ? { prepare: options.prepare } : {}),
     ...(options.afterCall ? { afterCall: options.afterCall } : {}),
+    ...(options.override ? { override: options.override } : {}),
     annotations: {
       readOnlyHint: access === "read",
       destructiveHint: access === "delete",
@@ -175,6 +199,18 @@ function surveyIdCrossCheck(
     return undefined;
   };
 }
+
+export const serverUtcOffsetSchema = z
+  .number()
+  .int()
+  .min(-14 * 60)
+  .max(14 * 60)
+  .optional()
+  .describe(
+    "MCP-only, never sent to LimeSurvey. UTC offset of the LimeSurvey server's local time in minutes (for example 120 " +
+      "for UTC+2). validfrom and validuntil are stored without a zone in that local time; without this value the " +
+      "timezone of the MCP host is assumed (reported as time_basis.offset_source).",
+  );
 
 const maxInlineImportChars = 200_000;
 
@@ -434,19 +470,50 @@ export const toolDefinitions: ToolDefinition[] = [
   define("set_participant_properties", "Set participant properties", `Update a participant matched by token or token-table ID.${describeWriteSpec("set_participant_properties")}`, "write", [surveyId(), p("query", jsonObject("Participant lookup properties.")), p("data", jsonObject("Participant properties to update."))], writeChecks("set_participant_properties")),
   define("list_participants", "List survey participants", "List and filter survey participants with server-side pagination.", "read", [
     surveyId(),
-    p("start", z.number().int().nonnegative().optional().describe("Zero-based result offset."), 0),
+    p("start", z.number().int().nonnegative().optional().describe("Lower bound for the participant row ID (tid): LimeSurvey returns rows with tid >= start, ordered by tid. It is not a row offset; page with the last tid + 1."), 0),
     p("limit", z.number().int().min(1).max(1000).optional().describe("Maximum participants to return."), 10),
     p("unused", z.boolean().optional().describe("Return only unused participants."), false),
     p("attributes", z.union([z.literal(false), stringArray("Participant fields to return.")]).optional().describe("Fields to return, or false for defaults."), false),
     p("conditions", z.union([jsonObject("Participant filter conditions."), z.array(jsonValueSchema)]).optional().describe("Participant filter conditions as an object or positional condition list."), {}),
   ]),
   define("mail_registered_participants", "Email registered participants", "Send registration emails to survey participants.", "write", [surveyId(), p("override_conditions", z.union([jsonObject("Email selection/override conditions."), z.array(jsonValueSchema)]).optional().describe("Replacement email conditions as an object or positional condition list."), {})]),
-  define("invite_participants", "Invite survey participants", "Send survey invitation emails to selected or eligible participants.", "write", [
-    surveyId(),
-    p("token_ids", z.array(z.number().int().positive()).nullable().optional().describe("Optional participant row IDs; null selects eligible participants."), null),
-    p("send_email", z.boolean().optional().describe("Actually send invitation emails."), true),
-    p("continue_on_error", z.boolean().optional().describe("Continue after individual email errors."), false),
-  ]),
+  define(
+    "invite_participants",
+    "Invite survey participants",
+    "Send survey invitation emails to selected or eligible participants. Preview first with dry_run=true: it sends " +
+      "nothing and never calls invite_participants, it simulates the selection from the participant list and reports " +
+      "would_receive and would_not_receive with a reason for every participant who is skipped (completed, " +
+      "already_invited, emailstatus_not_ok, invalid_email_address, not_valid_yet, expired, ...). Without " +
+      "continue_on_error LimeSurvey stops at the first participant whose validity window fails; the preview names " +
+      "that participant as stops_at_tid. The report stays within LIMESURVEY_MAX_RESPONSE_CHARS regardless of the " +
+      "table size: unselected participants (token_ids) are only counted as not_selected, and would_receive, " +
+      "would_not_receive and not_reached list at most 100 entries each (truncated_lists says which were cut, " +
+      "counts hold the full numbers). send_email=false is NOT a dry run: it resends the invitation to those who " +
+      "were already invited. Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
+    "write",
+    [
+      surveyId(),
+      p("token_ids", z.array(z.number().int().positive()).nullable().optional().describe("Optional participant row IDs; null (or an empty list) selects eligible participants."), null),
+      p("send_email", z.boolean().optional().describe(
+        "Which participants get an email. true (default): invite only participants who were not invited yet (sent = N " +
+          "or empty). false: resend the invitation ONLY to participants who are already invited (sent holds a date) - " +
+          "it does not turn the sending off. Emails are sent in both cases. To see who would be mailed without " +
+          "sending, use dry_run=true.",
+      ), true),
+      p("continue_on_error", z.boolean().optional().describe("Continue after a participant whose validity window (validfrom/validuntil) fails; by default LimeSurvey stops at the first one."), false),
+    ],
+    {
+      override: async (input, client) => (input.dry_run === true ? previewInvitation(input, client) : undefined),
+      extraSchema: {
+        dry_run: z.boolean().default(false).describe(
+          "MCP-only, never sent to LimeSurvey. true: send nothing and do not call invite_participants; read the " +
+            "participants (list_participants) and report who would receive an invitation and why the others would not. " +
+            "Allowed under every write scope; confirm_send_email is not needed.",
+        ),
+        server_utc_offset_minutes: serverUtcOffsetSchema,
+      },
+    },
+  ),
   define("remind_participants", "Remind survey participants", "Send reminder emails to selected or eligible participants.", "write", [
     surveyId(),
     p("minimum_days_between", optionalInteger("Minimum days since the previous reminder."), null),

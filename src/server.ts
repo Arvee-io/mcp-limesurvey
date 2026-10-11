@@ -57,7 +57,7 @@ function textResult(result: LimeSurveyToolResult, format: ResponseFormat): strin
   return `## ${result.method}\n\n${markdownValue(result.result)}${suffix}${warnings}`;
 }
 
-export const SERVER_VERSION = "1.3.1";
+export const SERVER_VERSION = "1.4.0";
 
 export function createServer(
   config: LimeSurveyConfig,
@@ -82,8 +82,13 @@ export function createServer(
         try {
           assertWriteScope(config, `limesurvey_${definition.method}`, rawInput);
           const preparedInput = definition.prepare ? await definition.prepare(rawInput, config) : rawInput;
-          const result = await client.call(definition.method, buildRpcParams(definition, preparedInput));
-          const warnings = definition.afterCall ? await definition.afterCall(result, preparedInput, client) : undefined;
+          const overridden = definition.override ? await definition.override(preparedInput, client, config) : undefined;
+          const result = overridden !== undefined
+            ? overridden
+            : await client.call(definition.method, buildRpcParams(definition, preparedInput));
+          const warnings = overridden === undefined && definition.afterCall
+            ? await definition.afterCall(result, preparedInput, client)
+            : undefined;
           const output: LimeSurveyToolResult = {
             ...prepareResult(definition.method, result, config.maxResponseChars),
             ...(warnings && warnings.length > 0 ? { warnings } : {}),

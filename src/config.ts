@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from "node:fs";
 import { LimeSurveyError, type LimeSurveyConfig } from "./types.js";
 import { WRITE_SCOPES, type WriteScope, type WriteScopeSource } from "./write-scope.js";
 
@@ -7,6 +8,82 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
     throw new LimeSurveyError(`Missing required environment variable ${name}.`);
   }
   return value;
+}
+
+/**
+ * Reads LIMESURVEY_PASSWORD_FILE. Messages name the variable and the path, never the content. Only a UTF-8 BOM and
+ * trailing line endings are removed; everything else, including blanks at the edges, belongs to the password.
+ */
+function readPasswordFile(file: string): { password: string; warnings: string[] } {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(file);
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? ` (${String(error.code)})` : "";
+    throw new LimeSurveyError(`LIMESURVEY_PASSWORD_FILE could not be read${code}: ${file}`);
+  }
+  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) {
+    throw new LimeSurveyError(
+      `LIMESURVEY_PASSWORD_FILE ${file} is encoded as UTF-16 (byte order mark FF FE or FE FF). That is what Windows `
+        + 'PowerShell 5.1 writes for ">" and Out-File. Write the file again as UTF-8 without BOM: in PowerShell 7 read '
+        + "the password with Read-Host -AsSecureString and save it with [IO.File]::WriteAllText(<path>, <plain text "
+        + "from the secure string>, [Text.UTF8Encoding]::new($false)), as shown in docs/INSTALLATION.md (Store the "
+        + "password in a file). Never type the password itself into a command line.",
+    );
+  }
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bytes = bytes.subarray(3);
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new LimeSurveyError(`LIMESURVEY_PASSWORD_FILE ${file} is not valid UTF-8. Save it as UTF-8 without BOM.`);
+  }
+  if (content.includes("\u0000")) {
+    throw new LimeSurveyError(
+      `LIMESURVEY_PASSWORD_FILE ${file} contains NUL bytes, which usually means UTF-16 without a byte order mark. `
+        + "Save it as UTF-8 without BOM (see docs/INSTALLATION.md, Store the password in a file).",
+    );
+  }
+  const password = content.replace(/[\r\n]+$/, "");
+  if (password === "") throw new LimeSurveyError(`LIMESURVEY_PASSWORD_FILE ${file} is empty.`);
+
+  const warnings: string[] = [];
+  if (process.platform !== "win32") {
+    try {
+      const mode = statSync(file).mode;
+      if ((mode & 0o077) !== 0) {
+        warnings.push(
+          `LIMESURVEY_PASSWORD_FILE ${file} is readable by group or others (mode ${(mode & 0o777).toString(8)}). `
+            + `Restrict it with: chmod 600 ${file}`,
+        );
+      }
+    } catch {
+      // The content was readable; a failing stat only means no permission warning.
+    }
+  }
+  return { password, warnings };
+}
+
+function resolvePassword(env: NodeJS.ProcessEnv): {
+  password: string;
+  source: "file" | "env";
+  warnings: string[];
+} {
+  const file = env.LIMESURVEY_PASSWORD_FILE?.trim();
+  const inline = env.LIMESURVEY_PASSWORD?.trim();
+  if (file) {
+    const read = readPasswordFile(file);
+    const warnings = [...read.warnings];
+    if (inline) {
+      warnings.unshift(
+        "Both LIMESURVEY_PASSWORD_FILE and LIMESURVEY_PASSWORD are set; the file wins and LIMESURVEY_PASSWORD is "
+          + "ignored. Remove LIMESURVEY_PASSWORD from the MCP client configuration.",
+      );
+    }
+    return { password: read.password, source: "file", warnings };
+  }
+  if (!inline) throw new LimeSurveyError("Missing LIMESURVEY_PASSWORD or LIMESURVEY_PASSWORD_FILE.");
+  return { password: inline, source: "env", warnings: [] };
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -91,10 +168,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LimeSurveyConf
   const effective = resolveScope(readOnly, requestedScope);
 
   url.hash = "";
+  const username = required(env, "LIMESURVEY_USERNAME");
+  const password = resolvePassword(env);
   const config: LimeSurveyConfig = {
     url,
-    username: required(env, "LIMESURVEY_USERNAME"),
-    password: required(env, "LIMESURVEY_PASSWORD"),
+    username,
+    password: password.password,
+    passwordSource: password.source,
     authPlugin: env.LIMESURVEY_AUTH_PLUGIN?.trim() || "Authdb",
     timeoutMs: positiveInteger(env.LIMESURVEY_TIMEOUT_MS, 30_000, "LIMESURVEY_TIMEOUT_MS"),
     maxResponseChars: positiveInteger(
@@ -141,6 +221,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LimeSurveyConf
       + `the stricter one applies, so the effective write scope is "${effective.scope}" `
       + `(${effective.source}). Remove one of the two variables to avoid confusion.`;
   }
+  if (password.warnings.length > 0) config.passwordWarnings = password.warnings;
   if (bearerToken) config.httpBearerToken = bearerToken;
   const allowedHosts = commaSeparated(env.MCP_HTTP_ALLOWED_HOSTS);
   if (allowedHosts) config.httpAllowedHosts = allowedHosts;
@@ -159,6 +240,7 @@ const RESTART_HINT = "Environment changes require a full Claude Code restart; re
 export function envPreflightWarnings(config: LimeSurveyConfig): string[] {
   const warnings: string[] = [];
   if (config.writeScopeWarning) warnings.push(config.writeScopeWarning);
+  warnings.push(...(config.passwordWarnings ?? []));
   if (!config.exportDir) {
     warnings.push(
       "LIMESURVEY_EXPORT_DIR is not set: file-export tools (export_responses_to_file, "

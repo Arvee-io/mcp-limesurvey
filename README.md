@@ -8,7 +8,7 @@
 
 A production-oriented [Model Context Protocol](https://modelcontextprotocol.io/)
 server for the [LimeSurvey RemoteControl 2 API](https://www.limesurvey.org/manual/RemoteControl_2_API).
-It exposes all 56 documented RemoteControl methods plus 16 guarded workflow tools
+It exposes all 56 documented RemoteControl methods plus 17 guarded workflow tools
 for discovery, participants, exports, capability detection, and responsive
 survey themes.
 
@@ -17,7 +17,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **72 MCP tools:** official methods plus focused workflow and theme tools
+- **73 MCP tools:** official methods plus focused workflow and theme tools
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
 - **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
   outreach), a legacy read-only switch, and explicit confirmations
@@ -33,9 +33,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 | Area | Tools | Count |
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
-| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status | 11 |
+| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation | 12 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **72** |
+| **Total** | | **73** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -63,7 +63,7 @@ npx -y limesurvey-mcp-server@latest
 The server uses stdio by default. Supply credentials through the MCP client
 configuration shown below. `@latest` receives the newest release whenever the
 MCP process starts; pin an exact version (for example
-`limesurvey-mcp-server@1.3.1`) for reproducible deployments.
+`limesurvey-mcp-server@1.4.0`) for reproducible deployments.
 
 > **`npx` prefers an existing global installation** over a registry download,
 > even a broken or outdated one, so `@latest` does not update a machine that
@@ -103,7 +103,7 @@ Required:
 |---|---|
 | `LIMESURVEY_URL` | Exact RemoteControl URL, for example `https://survey.example.com/index.php/admin/remotecontrol` |
 | `LIMESURVEY_USERNAME` | LimeSurvey service account |
-| `LIMESURVEY_PASSWORD` | Service account password |
+| `LIMESURVEY_PASSWORD` or `LIMESURVEY_PASSWORD_FILE` | Service account password, or the path to a file that holds only the password (UTF-8 without BOM). If both are set, the file wins and `LIMESURVEY_PASSWORD` is ignored with a startup warning |
 
 Important optional variables:
 
@@ -131,6 +131,22 @@ Important optional variables:
 
 The server intentionally does not load `.env` itself. The MCP client, process
 manager, or container runtime owns secret injection.
+
+### Keeping the password out of the client configuration
+
+With `LIMESURVEY_PASSWORD_FILE` the password lives in a file that only your own
+account can read, instead of in the MCP client configuration (which is often a
+readable JSON file or a shell command that ends up in the history). The server
+reads the file once at start-up, removes a UTF-8 BOM and the trailing line
+ending, and rejects an empty file, invalid UTF-8, and UTF-16 (what Windows
+PowerShell 5.1 writes with `>` or `Out-File`). It never prints the password or
+any part of it: error messages name only the variable and the path, and
+`limesurvey_get_instance_info` reports just `password_source` (`file` or
+`env`). On POSIX systems a start-up warning appears when the file is readable
+by group or others (`chmod 600`); on Windows restrict the file with `icacls`.
+Step-by-step commands that never put the password into a command line:
+[Store the password in a file](docs/INSTALLATION.md#store-the-password-in-a-file).
+After switching, remove `LIMESURVEY_PASSWORD` from the client configuration.
 
 ## MCP Client Setup
 
@@ -211,16 +227,19 @@ around a block by calling the RemoteControl API directly.
 
 | Write scope | Tools |
 |---|---|
-| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
+| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
 | `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 72 tools are listed (39 + 14 + 7 + 12). A tool that is missing from the
-server's scope table is treated as `outreach`. One call is argument-dependent:
+All 73 tools are listed (40 + 14 + 7 + 12). A tool that is missing from the
+server's scope table is treated as `outreach`. Two calls are argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
-responses; `lss`, `csv`, and `txt` imports stay at `content`.
+responses; `lss`, `csv`, and `txt` imports stay at `content`. And
+`limesurvey_invite_participants` with `dry_run=true` needs only `none`, because
+it sends nothing and never calls `invite_participants` (see
+[Checking an invitation run first](#checking-an-invitation-run-first)).
 
 `content` covers every survey setting that LimeSurvey lets
 `set_survey_properties` change, including start and expiry dates, notification
@@ -232,7 +251,7 @@ Additional confirmation literals are required for high-impact actions:
 | Action | Required argument |
 |---|---|
 | All `delete_*` tools | `confirm_destructive_action=true` |
-| Participant email tools | `confirm_send_email=true` |
+| Participant email tools | `confirm_send_email=true` (not needed for `limesurvey_invite_participants` with `dry_run=true`) |
 | Survey activation | `confirm_activation=true` |
 | Replacing an export or theme ZIP | `overwrite=true` and `confirm_overwrite=true` |
 | Assigning a survey theme | `confirm_theme_assignment=true` |
@@ -295,6 +314,71 @@ evaluated by LimeSurvey 6.17.11 and says nothing about either. A `get_summary`
 answer "No available data" is reported as `NO_PARTICIPANT_TABLE` (no participant
 table; access follows `access_mode`) or `NO_RESPONSE_TABLE` (survey not active:
 never activated or deactivated).
+
+An empty list is not an error: when `list_surveys`, `list_survey_groups`,
+`list_users`, `list_groups`, `list_questions`, `list_quotas`, or
+`list_participants` find nothing, LimeSurvey answers with a status text such as
+`No surveys found`; the server returns `[]` for exactly these methods and
+texts. Other statuses, such as `Error: No survey participant list` (no
+participant table), stay errors.
+
+## Checking an invitation run first
+
+`limesurvey_invite_participants` with `dry_run=true` sends nothing and never
+calls `invite_participants`. It reads the participants (`list_participants`) and
+simulates the selection of LimeSurvey 6.17.11, so you see before the real run who
+would be mailed and why the others would not. `send_email=false` is not a
+preview: in LimeSurvey it means "resend the invitation only to participants who
+were already invited" and mails them. `confirm_send_email` is not needed for a
+dry run, and a dry run is allowed under every write scope.
+
+The report contains:
+
+- `would_receive` (`tid`, `email`, `firstname`, `lastname`) in sending order;
+- `would_not_receive` (`tid`, `email`, `reasons`, optional `details`) with the
+  reasons `completed`, `missing_token`, `missing_email`, `already_invited`
+  (`send_email=true`, participant was invited) or `not_invited_yet`
+  (`send_email=false`), `emailstatus_not_ok` (the value is in `details`),
+  `invalid_email_address`, `not_valid_yet` (`validfrom` is after the server
+  time), `expired` (`validuntil` is before it), `not_selected` (`token_ids` set,
+  `tid` not in it; these participants are only counted, never listed one by
+  one), and `beyond_maxemails` (only when `maxemails` could be read);
+- without `continue_on_error`: `stops_at_tid`, the first participant whose
+  validity window fails (LimeSurvey stops sending there), and `not_reached`;
+- `warnings` (blanks at the edges, duplicate addresses among the recipients),
+  `limitations`, `time_basis`, and `borderline` (validity limits within 60
+  minutes of the server time);
+- `counts` with the full numbers (`would_receive`, `would_not_receive`,
+  `not_reached`, `not_selected`, `by_reason`).
+
+The report stays within `LIMESURVEY_MAX_RESPONSE_CHARS` whatever the table size:
+`would_receive`, `would_not_receive` and `not_reached` list at most 100 entries
+each, `warnings` and `borderline` at most 25. When a list is cut,
+`truncated_lists` names it with `returned` and `total`; `counts` always holds
+the complete numbers. Use `token_ids` to check specific participants.
+
+Known limits, also listed in `limitations`: the block list of the central
+participant database cannot be read through RemoteControl; `maxemails` (default
+50 emails per call) is readable only by super administrators; the address check
+is a port of LimeSurvey's own pattern and an approximation of PHP's result; mail
+transport errors cannot be simulated. RemoteControl has no clock method, so the
+server time is the HTTP `Date` header of the last answer. `validfrom` and
+`validuntil` are stored without a zone in the local time of the LimeSurvey
+server: pass `server_utc_offset_minutes` (for example `120` for UTC+2), otherwise
+the timezone of the machine running the MCP server is assumed (`time_basis`
+reports the source).
+
+`limesurvey_validate_participants` checks the whole participant table with the
+same code before you invite: whitespace at the edges (`WHITESPACE`), duplicate
+addresses (`DUPLICATE_EMAIL`, trimmed and case-insensitive) and tokens
+(`DUPLICATE_TOKEN`), address format (`INVALID_EMAIL`), `NOT_YET_VALID`,
+`EXPIRED`, `INVALID_VALIDITY_RANGE`, `EMAILSTATUS_NOT_OK`, `MISSING_EMAIL`, and
+`MISSING_TOKEN`. It returns `issues` (`tid`, `field`, `code`, `detail`) and
+`counts_by_code`. The answer is bound to `LIMESURVEY_MAX_RESPONSE_CHARS`: when
+there are too many issues, `issues` and `borderline` are cut to fit and marked
+with `issues_truncated`, `issues_total`, `issues_returned` and a
+`truncation_note`; `counts_by_code`, `participant_count` and `time_basis` are
+always complete.
 
 ## Responsive Survey Themes
 
@@ -376,6 +460,7 @@ that changing it requires a full restart.
 
 `limesurvey_get_instance_info` makes **no RemoteControl call** by default: it
 reports `server_version`, `instance_host` (host only, never credentials),
+`password_source` (`file` or `env`; never the path or the content),
 `transport`, `read_only` (true only for write scope `none`), `write_scope` and
 `write_scope_source` (`default`, `LIMESURVEY_WRITE_SCOPE` or
 `LIMESURVEY_READ_ONLY`), `experimental_methods_enabled`, per-directory
@@ -445,7 +530,7 @@ The 39 automated tests use mocked LimeSurvey JSON-RPC responses and cover:
 No live LimeSurvey credentials are required. Content evaluations must be created
 against a stable test instance; see [evaluations/README.md](evaluations/README.md).
 
-An opt-in live integration runner exercises all 72 tools against disposable,
+An opt-in live integration runner exercises all 73 tools against disposable,
 prefixed test records:
 
 ```bash
