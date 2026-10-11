@@ -33,7 +33,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   code, not by ID. The result has `summary`, `differences` (at most 500, then
   `truncated=true` and the full `differences_total`), and `limitations`. This
   makes 74 tools (73 before); tests, README, docs, the live runner, and the
-  S-01 scope table (scope `none`) were adjusted.
+  S-01 scope table (scope `none`) were adjusted. Without `language` the base
+  language is read from the `list_groups` rows (no `get_survey_properties`, so
+  no survey-settings permission is needed), and the answer options of
+  dual-scale questions (type `1`) are requested as `answeroptions_multiscale`
+  and compared per scale instead of being reported as missing.
 - `export_survey_to_file` asks `export_survey_structure` first and `export_survey`
   second; the `EXPORT_UNSUPPORTED` error lists why each failed. Researched on
   2026-10-11: no verified LimeSurvey 6.x plugin exports a `.lss` over

@@ -557,7 +557,12 @@ survey against its source file. `lss_path` must point to a file inside
 `LIMESURVEY_IMPORT_DIR` (or `LIMESURVEY_EXPORT_DIR` as a fallback; same path
 check and size limit as `import_data_path`). The file is read locally; the live
 survey is read with `list_groups`, `list_questions`, and
-`get_question_properties` only.
+`get_question_properties` only, so read access to the survey content is enough
+(`get_survey_properties` and its separate survey-settings permission are not
+used). Without `language`, the base language is taken from the `language` field
+of the `list_groups` rows. Answer options of dual-scale questions (type `1`)
+are requested as `answeroptions_multiscale`, which is the only name LimeSurvey
+accepts for them, and compared per scale.
 
 Groups (name and order), questions (code, type, mandatory, relevance, other,
 text, help, position), subquestions, answer options, and question attributes
