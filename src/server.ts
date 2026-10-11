@@ -83,12 +83,15 @@ export function createServer(
           assertWriteScope(config, `limesurvey_${definition.method}`, rawInput);
           const preparedInput = definition.prepare ? await definition.prepare(rawInput, config) : rawInput;
           const overridden = definition.override ? await definition.override(preparedInput, client, config) : undefined;
-          const result = overridden !== undefined
+          const answer = overridden !== undefined
             ? overridden
             : await client.call(definition.method, buildRpcParams(definition, preparedInput));
           const warnings = overridden === undefined && definition.afterCall
-            ? await definition.afterCall(result, preparedInput, client)
+            ? await definition.afterCall(answer, preparedInput, client)
             : undefined;
+          const result = overridden === undefined && definition.enrich
+            ? definition.enrich(answer, preparedInput)
+            : answer;
           const output: LimeSurveyToolResult = {
             ...prepareResult(definition.method, result, config.maxResponseChars),
             ...(warnings && warnings.length > 0 ? { warnings } : {}),

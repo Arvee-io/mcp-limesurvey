@@ -60,6 +60,7 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_export_responses_by_token_to_file: "none",
   limesurvey_export_statistics_to_file: "none",
   limesurvey_export_survey_to_file: "none",
+  limesurvey_verify_survey_against_lss: "none",
   // none: local-only theme tools and theme reads
   limesurvey_generate_survey_theme: "none",
   limesurvey_validate_survey_theme: "none",

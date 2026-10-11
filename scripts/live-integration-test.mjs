@@ -118,7 +118,7 @@ const generatedExportPaths = [];
 try {
   await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
   const listed = await mcpClient.listTools();
-  if (listed.tools.length !== 73) throw new Error(`Expected 73 tools, received ${listed.tools.length}.`);
+  if (listed.tools.length !== 74) throw new Error(`Expected 74 tools, received ${listed.tools.length}.`);
 
   await invoke(mcpClient, "limesurvey_get_session_key");
   await attempt(mcpClient, "limesurvey_get_available_site_settings");
@@ -196,13 +196,18 @@ try {
       survey_id: importedSurveyId,
       confirm_destructive_action: true,
     }));
+    // Read-only comparison of the imported survey with the file it came from (S-10).
+    await attempt(mcpClient, "limesurvey_verify_survey_against_lss", {
+      survey_id: importedSurveyId,
+      lss_path: importFixtureName,
+    });
   }
 
   await attempt(mcpClient, "limesurvey_add_language", { survey_id: primarySurveyId, language: "de" });
   await attempt(mcpClient, "limesurvey_get_survey_languages", { survey_id: primarySurveyId });
   await attempt(mcpClient, "limesurvey_get_language_properties", {
     survey_id: primarySurveyId,
-    properties: ["surveyls_title", "surveyls_description"],
+    properties: ["surveyls_title", "surveyls_description", "attachments"],
     language: "de",
   });
   await attempt(mcpClient, "limesurvey_set_language_properties", {
@@ -627,7 +632,7 @@ try {
   await server.close().catch(() => {});
 }
 
-const allTools = 73;
+const allTools = 74;
 const failed = results.filter((item) => item.status === "failed");
 const passed = results.filter((item) => item.status === "passed" || item.status === "expected_error");
 console.log(JSON.stringify({

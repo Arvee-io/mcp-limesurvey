@@ -273,6 +273,7 @@ const expectedScopes: Record<string, Scope> = {
   limesurvey_export_statistics_to_file: "none",
   limesurvey_get_instance_info: "none",
   limesurvey_export_survey_to_file: "none",
+  limesurvey_verify_survey_against_lss: "none",
   limesurvey_generate_survey_theme: "none",
   limesurvey_validate_survey_theme: "none",
   limesurvey_get_theme_publication_guide: "none",
@@ -318,7 +319,7 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
 };
 
 test("[S-01] every registered tool is gated by its documented write scope", async () => {
-  assert.equal(Object.keys(expectedScopes).length, 73);
+  assert.equal(Object.keys(expectedScopes).length, 74);
   const writeTools = Object.entries(expectedScopes).filter(([, scope]) => scope !== "none").map(([name]) => name);
   assert.deepEqual(Object.keys(minimalArguments).sort(), [...writeTools].sort());
 

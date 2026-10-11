@@ -5,6 +5,53 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `get_language_properties` adds `attachments_parsed` next to the unchanged raw
+  `attachments` field, based on user feedback: `{ <mail type>: [ { file_name,
+  url, size, relevance } ] }`. Both storage formats are parsed (JSON string
+  since DB version 647, PHP serialize string on older instances). An empty value
+  gives `{}`; an unparsable one gives `null` and the warning
+  `ATTACHMENTS_UNPARSEABLE`.
+- `get_language_properties` reports requested property names that LimeSurvey
+  dropped silently in the warning `UNKNOWN_FIELDS` (`unknown_fields`).
+- `get_instance_info` with `probe_instance=true` reports `server_time` (UTC) and
+  `server_time_source` (`http_date_header`), based on user feedback; without the
+  probe both are `null` and `server_time_hint` says so. `server_time_note`
+  explains that the value is the web server's clock in UTC; the PHP time zone
+  is not readable through RemoteControl, only the `timeadjust` offset is (and
+  only by superadmins).
+
+- New read tool `verify_survey_against_lss` (write scope `none`), based on user
+  feedback that a survey cannot be exported over RemoteControl: it compares a
+  `.lss` file inside `LIMESURVEY_IMPORT_DIR` (fallback `LIMESURVEY_EXPORT_DIR`,
+  same path check and size limit as `import_data_path`) with the live survey
+  using only `list_groups`, `list_questions`, and `get_question_properties`.
+  Groups, questions, subquestions, answer options, and attributes are matched by
+  code, not by ID. The result has `summary`, `differences` (at most 500, then
+  `truncated=true` and the full `differences_total`), and `limitations`. This
+  makes 74 tools (73 before); tests, README, docs, the live runner, and the
+  S-01 scope table (scope `none`) were adjusted. Without `language` the base
+  language is read from the `list_groups` rows (no `get_survey_properties`, so
+  no survey-settings permission is needed), and the answer options of
+  dual-scale questions (type `1`) are requested as `answeroptions_multiscale`
+  and compared per scale instead of being reported as missing.
+- `export_survey_to_file` asks `export_survey_structure` first and `export_survey`
+  second; the `EXPORT_UNSUPPORTED` error lists why each failed. Researched on
+  2026-10-11: no verified LimeSurvey 6.x plugin exports a `.lss` over
+  RemoteControl; upstream pull request #5384 adds `export_survey_structure` for
+  the 7.x line. A plugin can answer additional methods on the core URL, so the
+  earlier statement that RemoteControl cannot be extended is corrected in the
+  tool description and the README. The description names
+  `verify_survey_against_lss` as the alternative.
+
+### Documentation
+
+- README section "Limits of RemoteControl": no mail send log, no list of survey
+  files, server time only from the HTTP `Date` header.
+
 ## [1.4.0] - 2026-10-12
 
 This release has 73 tools (72 before the participant validation tool). Most
