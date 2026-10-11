@@ -17,6 +17,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `ATTACHMENTS_UNPARSEABLE`.
 - `get_language_properties` reports requested property names that LimeSurvey
   dropped silently in the warning `UNKNOWN_FIELDS` (`unknown_fields`).
+- `get_instance_info` with `probe_instance=true` reports `server_time` (UTC) and
+  `server_time_source` (`http_date_header`), based on user feedback; without the
+  probe both are `null` and `server_time_hint` says so. `server_time_note`
+  explains that the value is the web server's clock, not the LimeSurvey time
+  zone.
+
+### Documentation
+
+- README section "Limits of RemoteControl": no mail send log, no list of survey
+  files, server time only from the HTTP `Date` header.
 
 ## [1.4.0] - 2026-10-12
 

@@ -140,6 +140,9 @@ function capabilityBlockedBy(config: LimeSurveyConfig): Record<string, JsonValue
   };
 }
 
+const SERVER_TIME_NOTE = "server_time is the web server's clock in UTC (HTTP Date header). The LimeSurvey time zone "
+  + "and its timeadjust offset are readable through RemoteControl only for superadmins (get_site_settings('timeadjust')).";
+
 function decodeBase64(value: JsonValue, maxBytes: number): Buffer {
   if (typeof value !== "string") {
     throw new LimeSurveyError("LimeSurvey did not return a base64 string for the export.");
@@ -548,8 +551,11 @@ export function registerWorkflowTools(
         + "(available) or the reason a capability is unavailable. Set "
         + "probe_instance=true to additionally call list_surveys (connectivity/auth proof, count only) and "
         + "get_site_settings(\"versionnumber\") — the latter requires a superadmin service account and degrades to "
-        + "permission_level=\"standard\" with instance_version=null otherwise. Call this before relying on file "
-        + "export/import or theming tools.",
+        + "permission_level=\"standard\" with instance_version=null otherwise. The probe also fills server_time "
+        + "(ISO-8601 UTC) and server_time_source (\"http_date_header\"): RemoteControl has no clock method, so the "
+        + "time comes from the HTTP Date header of the answer; without the probe both are null and "
+        + "server_time_hint says so. server_time_note explains that this is the web server's UTC clock, not the "
+        + "LimeSurvey time zone. Call this before relying on file export/import or theming tools.",
       inputSchema: strictInput({
         probe_instance: z.boolean().default(false)
           .describe("Also call list_surveys and get_site_settings to probe live connectivity, auth, and version/permission level."),
@@ -581,6 +587,10 @@ export function registerWorkflowTools(
         capability_blocked_by: capabilityReasons,
         restart_hint: "Environment changes require a full Claude Code restart; reconnecting the MCP server does "
           + "not reload environment variables.",
+        server_time: null,
+        server_time_source: null,
+        server_time_hint: "No RemoteControl call was made, so there is no server time. Use probe_instance=true to read it.",
+        server_time_note: SERVER_TIME_NOTE,
       };
       if (!probe_instance) return base;
 
@@ -614,8 +624,19 @@ export function registerWorkflowTools(
 
       const defaultTheme = await bestEffortSiteSetting(client, "defaulttemplate");
 
+      // RemoteControl has no clock method; the only source is the Date header (web server clock, always UTC).
+      const serverDate = client.lastServerDate;
+      const serverTime: Record<string, JsonValue> = serverDate
+        ? { server_time: serverDate.toISOString(), server_time_source: "http_date_header" }
+        : {
+          server_time: null,
+          server_time_source: null,
+          server_time_hint: "The LimeSurvey answers carried no usable HTTP Date header, so the server time is unknown.",
+        };
+
       return {
         ...base,
+        ...serverTime,
         survey_count: surveyCount,
         instance_version: instanceVersion,
         permission_level: permissionLevel,
