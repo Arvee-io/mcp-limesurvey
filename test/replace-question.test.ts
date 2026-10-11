@@ -486,6 +486,72 @@ for (const [label, orders] of [["gaps 2, 4, 6", [2, 4, 6]], ["0-based 0, 1, 2", 
   });
 }
 
+/** delete_question that the server executes, but whose answer never reaches the client (timeout, 5xx, dropped connection). */
+const deletesThenFails = (probeFails: boolean): Record<string, Override> => ({
+  delete_question: (params, state) => {
+    if (params[0] !== OLD_QID) return undefined;
+    state.questions = state.questions.filter((entry) => entry.qid !== OLD_QID && entry.parent !== OLD_QID);
+    renumber(state);
+    throw new Error("The operation was aborted due to timeout");
+  },
+  get_question_properties: (params, state) => {
+    if (probeFails && params[0] === OLD_QID && !state.questions.some((item) => item.qid === OLD_QID)) {
+      throw new Error("connection reset");
+    }
+    return undefined;
+  },
+});
+
+for (const [label, differentCode] of [["the same code (with rename)", false], ["a different code (no rename)", true]] as const) {
+  test(`[S-03b] replace_question keeps the new question when delete_question was executed but not answered, ${label}`, async () => {
+    const sim = initialSim(deletesThenFails(false));
+    if (differentCode) sim.importTitle = "Q01";
+    const session = await connected(sim);
+    try {
+      const data = differentCode
+        ? await lsqBase64((xml) => xml.replace("<![CDATA[Q00]]>", "<![CDATA[Q01]]>"))
+        : (await args()).import_data;
+      const response = await session.client.callTool({ name: TOOL, arguments: await args({ import_data: data }) });
+      assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+      const result = structured(response);
+      assert.equal(result.new_question_id, 200);
+      assert.equal(result.old_question_id, OLD_QID);
+      assert.equal(result.verification.ok, true, JSON.stringify(result.verification));
+      const deletes = session.requests.filter((request) => request.method === "delete_question").map((request) => request.params[0]);
+      assert.deepEqual(deletes, [OLD_QID], "the new question must never be deleted");
+      assert.deepEqual(mains(sim).map((item) => item.title), ["Q_BEFORE", differentCode ? "Q01" : "Q00", "Q_AFTER"]);
+      assert.ok(sim.questions.some((item) => item.qid === 200));
+      const step = (result.steps as Array<{ step: string; detail?: Record<string, unknown> }>).find((item) => item.step === "delete_old_question");
+      assert.ok(step, "the delete step is reported");
+      assert.match(JSON.stringify(step), /unclear|ambiguous|not answered/i);
+    } finally {
+      await session.close();
+    }
+  });
+}
+
+test("[S-03b] replace_question: an unanswered delete whose probe also fails deletes nothing and names both questions", async () => {
+  const sim = initialSim(deletesThenFails(true));
+  const session = await connected(sim);
+  try {
+    const response = await session.client.callTool({ name: TOOL, arguments: await args() });
+    assert.equal(response.isError, true);
+    const error = structured(response);
+    assert.equal(error.code, "REPLACE_QUESTION_FAILED");
+    assert.equal(error.details.failed_step, "delete_old_question");
+    assert.equal(error.details.rolled_back, false);
+    assert.doesNotMatch(String(error.message), /rolled back; the original question is unchanged/);
+    const cleanup = error.details.manual_cleanup as Array<Record<string, unknown>>;
+    const mentioned = JSON.stringify(cleanup);
+    assert.ok(mentioned.includes(String(OLD_QID)) && mentioned.includes("200"), mentioned);
+    const deletes = session.requests.filter((request) => request.method === "delete_question").map((request) => request.params[0]);
+    assert.deepEqual(deletes, [OLD_QID], "the new question must not be deleted when the state is unknown");
+    assert.ok(sim.questions.some((item) => item.qid === 200));
+  } finally {
+    await session.close();
+  }
+});
+
 test("[S-03b] replace_question under write scope none is blocked before any RPC", async () => {
   const session = await connected(initialSim(), { ...baseConfig, writeScope: "none", readOnly: true });
   try {
