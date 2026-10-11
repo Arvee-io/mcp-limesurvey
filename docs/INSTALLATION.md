@@ -17,7 +17,8 @@ Start with `LIMESURVEY_WRITE_SCOPE=none` (equivalent to `LIMESURVEY_READ_ONLY=tr
 to verify the connection and the visible surveys. For building and correcting
 surveys, switch to `LIMESURVEY_WRITE_SCOPE=content`: it allows imports,
 creating and editing survey content, and theme assignment, but not activation,
-deletion, participants, responses, or email. Raise the scope further only when
+deletion, participants, responses, or email (importing a `.lsa` archive, which
+activates the survey and brings participants and responses, needs `outreach`). Raise the scope further only when
 those actions are intended (`lifecycle`, then `outreach`); the full tool
 list per scope is in the README section *Write Safety*.
 

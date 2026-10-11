@@ -214,7 +214,10 @@ around a block by calling the RemoteControl API directly.
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
 All 71 tools are listed (38 + 14 + 7 + 12). A tool that is missing from the
-server's scope table is treated as `outreach`.
+server's scope table is treated as `outreach`. One call is argument-dependent:
+`limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
+because a `.lsa` archive activates the survey and imports participants and
+responses; `lss`, `csv`, and `txt` imports stay at `content`.
 Additional confirmation literals are required for high-impact actions:
 
 | Action | Required argument |

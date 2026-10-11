@@ -19,7 +19,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (new `src/write-scope.ts`, single source of truth); a tool without an entry is
   treated as `outreach`. Blocked calls fail before any file read or RPC request
   with `WRITE_SCOPE_INSUFFICIENT`, naming the current and required scope and
-  the variable that set it.
+  the variable that set it. `import_survey` with `import_data_type=lsa`
+  requires `outreach`, because a `.lsa` archive activates the survey and
+  imports participants and responses.
 - A startup warning when `LIMESURVEY_READ_ONLY` and `LIMESURVEY_WRITE_SCOPE`
   are both set; the stricter level applies.
 - `get_instance_info` reports `write_scope` and `write_scope_source` and adds
