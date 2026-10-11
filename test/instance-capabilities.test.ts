@@ -83,6 +83,11 @@ test("get_instance_info without probe makes no RemoteControl calls and reports d
         export_survey_to_file: true,
         list_installed_themes: true,
         theme_generation: false,
+        theme_assignment: true,
+        content_changes: true,
+        lifecycle_changes: true,
+        participant_outreach: true,
+        file_exports: true,
       });
       assert.match(String(result.restart_hint), /restart/i);
       assert.equal(result.instance_version, undefined);

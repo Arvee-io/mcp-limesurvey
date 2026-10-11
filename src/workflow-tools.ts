@@ -8,7 +8,7 @@ import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
 import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
-import { assertWriteScope } from "./write-scope.js";
+import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
 const surveyId = z.number().int().positive().describe("Numeric LimeSurvey survey ID.");
@@ -97,6 +97,41 @@ async function directoryInfo(configuredPath: string | undefined): Promise<JsonVa
     }
   }
   return { configured: true, path: configuredPath, exists, writable };
+}
+
+/**
+ * Per capability: null when available, otherwise the reasons (write scope and/or missing configuration)
+ * joined with "; ". The keys are the keys of get_instance_info's capabilities object.
+ */
+function capabilityBlockedBy(config: LimeSurveyConfig): Record<string, JsonValue> {
+  const { scope, source } = effectiveWriteScope(config);
+  const scopeReason = (required: WriteScope): string | null => {
+    if (scopeAllows(scope, required)) return null;
+    const via = source === "LIMESURVEY_READ_ONLY" ? "LIMESURVEY_READ_ONLY=true" : `LIMESURVEY_WRITE_SCOPE=${scope}`;
+    return `needs write scope "${required}" but the current scope is "${scope}" (set by ${via})`;
+  };
+  const configReason = (missing: boolean, reason: string): string | null => (missing ? reason : null);
+  const join = (...reasons: Array<string | null>): JsonValue => {
+    const present = reasons.filter((reason): reason is string => reason !== null);
+    return present.length > 0 ? present.join("; ") : null;
+  };
+  return {
+    import_via_path: join(
+      scopeReason("content"),
+      configReason(!config.importDir && !config.exportDir, "LIMESURVEY_IMPORT_DIR (or LIMESURVEY_EXPORT_DIR) is not set"),
+    ),
+    export_survey_to_file: join(
+      configReason(!config.enableExperimentalMethods, "LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS is not true"),
+      configReason(!config.exportDir, "LIMESURVEY_EXPORT_DIR is not set"),
+    ),
+    list_installed_themes: null,
+    theme_generation: configReason(!config.themeDir, "LIMESURVEY_THEME_DIR is not set"),
+    theme_assignment: join(scopeReason("content")),
+    content_changes: join(scopeReason("content")),
+    lifecycle_changes: join(scopeReason("lifecycle")),
+    participant_outreach: join(scopeReason("outreach")),
+    file_exports: configReason(!config.exportDir, "LIMESURVEY_EXPORT_DIR is not set"),
+  };
 }
 
 function decodeBase64(value: JsonValue, maxBytes: number): Buffer {
@@ -387,8 +422,11 @@ export function registerWorkflowTools(
     {
       title: "Get MCP server and LimeSurvey capability info",
       description: "Report server-side configuration without any RemoteControl call by default: server_version, "
-        + "instance_host, transport, read_only, experimental_methods_enabled, configured export/import/theme "
-        + "directories (each with a local exists/writable check), and a capabilities summary. Set "
+        + "instance_host, transport, read_only (true only for write scope none), write_scope and "
+        + "write_scope_source, experimental_methods_enabled, configured export/import/theme directories (each "
+        + "with a local exists/writable check), and a capabilities summary. capabilities are booleans computed "
+        + "after the write scope and the configuration; capability_blocked_by has the same keys and holds null "
+        + "(available) or the reason a capability is unavailable. Set "
         + "probe_instance=true to additionally call list_surveys (connectivity/auth proof, count only) and "
         + "get_site_settings(\"versionnumber\") — the latter requires a superadmin service account and degrades to "
         + "permission_level=\"standard\" with instance_version=null otherwise. Call this before relying on file "
@@ -406,19 +444,21 @@ export function registerWorkflowTools(
         directoryInfo(config.importDir),
         directoryInfo(config.themeDir),
       ]);
+      const { scope, source } = effectiveWriteScope(config);
+      const capabilityReasons = capabilityBlockedBy(config);
       const base: Record<string, JsonValue> = {
         server_version: SERVER_VERSION,
         instance_host: config.url.host,
         transport: config.transport ?? "stdio",
-        read_only: config.readOnly ?? false,
+        read_only: scope === "none",
+        write_scope: scope,
+        write_scope_source: source,
         experimental_methods_enabled: config.enableExperimentalMethods ?? false,
         directories: { export_dir: exportDir, import_dir: importDir, theme_dir: themeDir },
-        capabilities: {
-          import_via_path: true,
-          export_survey_to_file: config.enableExperimentalMethods ?? false,
-          list_installed_themes: true,
-          theme_generation: Boolean(config.themeDir),
-        },
+        capabilities: Object.fromEntries(
+          Object.entries(capabilityReasons).map(([key, reason]) => [key, reason === null]),
+        ),
+        capability_blocked_by: capabilityReasons,
         restart_hint: "Environment changes require a full Claude Code restart; reconnecting the MCP server does "
           + "not reload environment variables.",
       };

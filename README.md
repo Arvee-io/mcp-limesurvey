@@ -308,8 +308,18 @@ that changing it requires a full restart.
 
 `limesurvey_get_instance_info` makes **no RemoteControl call** by default: it
 reports `server_version`, `instance_host` (host only, never credentials),
-`transport`, `read_only`, `experimental_methods_enabled`, per-directory
+`transport`, `read_only` (true only for write scope `none`), `write_scope` and
+`write_scope_source` (`default`, `LIMESURVEY_WRITE_SCOPE` or
+`LIMESURVEY_READ_ONLY`), `experimental_methods_enabled`, per-directory
 `{configured, path, exists, writable}` checks, and a `capabilities` summary.
+`capabilities` stays a map of booleans (`import_via_path`,
+`export_survey_to_file`, `list_installed_themes`, `theme_generation`,
+`theme_assignment`, `content_changes`, `lifecycle_changes`,
+`participant_outreach`, `file_exports`), computed after the write scope and
+the configured directories. `capability_blocked_by` has exactly the same keys
+and holds `null` when a capability is available, otherwise the reason (the
+required and current write scope with its source, and/or the missing environment
+variable; several reasons are joined with `; `).
 Set `probe_instance=true` to additionally call `list_surveys` (connectivity/
 auth proof, count only) and `get_site_settings("versionnumber")`, which
 requires a superadmin service account and degrades to

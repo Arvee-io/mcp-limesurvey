@@ -22,6 +22,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the variable that set it.
 - A startup warning when `LIMESURVEY_READ_ONLY` and `LIMESURVEY_WRITE_SCOPE`
   are both set; the stricter level applies.
+- `get_instance_info` reports `write_scope` and `write_scope_source` and adds
+  `capability_blocked_by` (same keys as `capabilities`; `null` or the reason,
+  naming the required and current scope or the missing environment variable).
+  New capabilities: `theme_assignment`, `content_changes`,
+  `lifecycle_changes`, `participant_outreach`, `file_exports`.
 
 ### Changed
 
@@ -35,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `export_survey_to_file`. Their directory checks are unchanged.
 - `get_session_key` and `release_session_key` are allowed under every scope
   (they were previously blocked in read-only mode).
+- `get_instance_info` computes `capabilities` after the write scope and the
+  configuration (still booleans). `import_via_path` was always `true` before,
+  even in read-only mode or without an import directory; it is now `false` with
+  a reason in `capability_blocked_by` in those cases.
 
 ## [1.3.1] - 2026-07-25
 
