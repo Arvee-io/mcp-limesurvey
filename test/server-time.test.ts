@@ -48,6 +48,16 @@ test("[S-08] probe_instance reports the server clock from the HTTP Date header a
   assert.match(String(result.server_time_note), /UTC/);
   assert.match(String(result.server_time_note), /timeadjust/);
   assert.match(String(result.server_time_note), /superadmin/i);
+  // A successful probe has a server time, so the no-probe hint must not contradict it.
+  assert.equal(Object.hasOwn(result, "server_time_hint"), false, JSON.stringify(result));
+});
+
+test("[S-08] the note says the time zone is not readable and only timeadjust is", async () => {
+  const { result } = await instanceInfo(true, "Sun, 11 Oct 2026 19:10:51 GMT");
+  const note = String(result.server_time_note);
+  assert.match(note, /PHP time zone/);
+  assert.match(note, /not readable/i);
+  assert.match(note, /only the `?timeadjust`? offset/i);
 });
 
 test("[S-08] without probe_instance no RPC is made and server_time is null with a hint", async () => {
