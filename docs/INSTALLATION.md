@@ -147,7 +147,7 @@ do it.
 ```bash
 git clone https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server.git
 cd limesurvey-mcp-server
-git checkout v1.3.1
+git checkout v1.4.0
 npm ci
 npm test
 ```
@@ -160,7 +160,7 @@ Configure the MCP client to run Node.js with the absolute path to
 ```bash
 git clone https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server.git
 cd limesurvey-mcp-server
-git checkout v1.3.1
+git checkout v1.4.0
 cp .env.example .env
 docker compose up --build -d
 ```
@@ -192,7 +192,7 @@ npm test
 npm pack --dry-run
 ```
 
-The guarded live suite covers all 72 tools. It creates and deletes prefixed
+The guarded live suite covers all 73 tools. It creates and deletes prefixed
 test records and must only be used on an approved test instance. See
 [Live Integration Testing](LIVE_TESTING.md).
 
@@ -203,7 +203,7 @@ process start; restart the client fully. For a pinned `npx` installation,
 change the version in the MCP configuration and restart:
 
 ```text
-limesurvey-mcp-server@1.3.1
+limesurvey-mcp-server@1.4.0
 ```
 
 For a global installation:
@@ -220,7 +220,7 @@ For a source installation:
 
 ```bash
 git fetch --tags
-git checkout v1.3.1
+git checkout v1.4.0
 npm ci
 npm test
 ```

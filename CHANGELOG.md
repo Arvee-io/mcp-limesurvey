@@ -5,7 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] - 2026-10-12
+
+This release has 73 tools (72 before the participant validation tool). Most
+changes are based on user feedback.
 
 ### Added
 
@@ -15,7 +18,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   outside the server's confirmations. `content` allows building and correcting
   surveys (imports, structure, texts, quotas, theme assignment); `lifecycle`
   adds activation and deletion; `outreach` adds participants, responses,
-  uploads, and email. Every one of the 72 tools has a documented minimum scope
+  uploads, and email. Every one of the 73 tools has a documented minimum scope
   (new `src/write-scope.ts`, single source of truth); a tool without an entry is
   treated as `outreach`. Blocked calls fail before any file read or RPC request
   with `WRITE_SCOPE_INSUFFICIENT`, naming the current and required scope and
@@ -49,8 +52,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `hint_code` and `hint`; `hint_code`, `hint`, and `writable_fields` appear on
   the top level of errors from official, workflow, and theme tools.
 
-- New read tool `get_participant_table_status` (72 tools in total, write scope
-  `none`), based on user feedback that `usetokens` and the missing participant
+- New read tool `get_participant_table_status` (write scope `none`), based on user feedback that `usetokens` and the missing participant
   table were misread: it reports `exists`, `participant_count` and
   `survey_is_closed_access` with an explanation and its basis. Existence comes
   from `get_summary(token_count)`; closed access follows `access_mode` where the
@@ -71,7 +73,56 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   accepts: <parameters>.` for official, workflow, and theme tools (new
   `src/input-schema.ts`); other validation messages are unchanged.
 
+- Based on user feedback, `invite_participants` has an MCP-only `dry_run`
+  (never sent to LimeSurvey) that previews an invitation run: with
+  `dry_run=true` the RemoteControl method `invite_participants` is never
+  called, not even with `send_email=false`, which means "resend to those
+  already invited" and mails them. The server reads the participants and
+  simulates the selection of LimeSurvey 6.17.11 (completed, missing token or
+  email, already invited, `emailstatus`, address pattern, validity window,
+  `token_ids`, `maxemails`). The report lists `would_receive` and
+  `would_not_receive` with reasons, `stops_at_tid` and `not_reached` (without
+  `continue_on_error` LimeSurvey stops at the first participant whose validity
+  fails), `warnings`, `limitations`, `time_basis`, and `borderline`. A dry run
+  needs write scope `none` and no `confirm_send_email`. Tool definitions gained
+  an optional `override` hook for this; `server_utc_offset_minutes` states the
+  UTC offset of the LimeSurvey server.
+- New read tool `validate_participants` (write scope `none`, 73 tools in
+  total): checks the whole participant table for whitespace at the edges,
+  duplicate addresses and tokens, invalid addresses, `validfrom`/`validuntil`
+  against the server time, `validfrom` after `validuntil`, `emailstatus` other
+  than `OK`, and missing email or token. The server time is the HTTP `Date`
+  header, which the client now remembers; `validfrom`/`validuntil` are read in
+  the server's local time (`server_utc_offset_minutes`, or the timezone of the
+  MCP host as an assumption that `time_basis` states).
+- New `LIMESURVEY_PASSWORD_FILE`, based on user feedback: the password can live
+  in a file that only the account can read instead of in the MCP client
+  configuration. A UTF-8 BOM and trailing line endings are removed; UTF-16
+  (Windows PowerShell 5.1 `>`/`Out-File`), invalid UTF-8, and empty or missing
+  files fail with a message that names the path and never the password. The
+  file wins over `LIMESURVEY_PASSWORD`, and a startup warning names both
+  variables. On POSIX a warning appears for files readable by group or others.
+  `get_instance_info` reports `password_source` (`file` or `env`) without path
+  or content. `docs/INSTALLATION.md` shows how to create the file without
+  typing the password into a command line.
+
 ### Changed
+
+- Empty lists are no longer errors: `list_surveys`, `list_survey_groups`,
+  `list_users`, `list_groups`, `list_questions`, `list_quotas`, and
+  `list_participants` return `[]` when LimeSurvey answers with its nothing-found
+  status (`No surveys found`, `No survey groups found`, `No users found`,
+  `No groups found`, `No questions found`, `No quotas found`,
+  `No survey participants found.`). Found by an early live run against a fresh
+  instance, where `list_surveys` failed with `No surveys found`. Other
+  statuses, such as `Error: No survey participant list`, stay errors.
+- The description of `send_email` of `invite_participants` follows the
+  LimeSurvey source: `true` (default) invites only participants who were not
+  invited yet, `false` resends only to those already invited; emails are sent
+  in both cases. `confirm_send_email` is required unless `dry_run=true`.
+- `docs/LIVE_TESTING.md` explains that LimeSurvey 6 source trees have no
+  `docs/demosurveys` and which sample survey to supply; the live runner covers
+  `validate_participants` and the invitation dry run (73 tools).
 
 - `set_group_properties` with `group_name` or `description` now needs a
   language (`data.language`); without one LimeSurvey dropped the text
@@ -258,6 +309,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - JSON-RPC 1.0 client with session reuse, retry, timeouts, structured MCP output,
   Zod validation, annotations, stdio transport, and mocked endpoint tests.
 
+[1.4.0]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.3.1...v1.4.0
 [1.3.0]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.2.1...v1.2.2

@@ -118,7 +118,7 @@ const generatedExportPaths = [];
 try {
   await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
   const listed = await mcpClient.listTools();
-  if (listed.tools.length !== 72) throw new Error(`Expected 72 tools, received ${listed.tools.length}.`);
+  if (listed.tools.length !== 73) throw new Error(`Expected 73 tools, received ${listed.tools.length}.`);
 
   await invoke(mcpClient, "limesurvey_get_session_key");
   await attempt(mcpClient, "limesurvey_get_available_site_settings");
@@ -369,6 +369,11 @@ try {
     attributes: ["tid", "firstname", "lastname", "email", "token"],
     limit: 100,
   });
+  // Read-only participant check; the server time comes from the HTTP Date header of the instance.
+  const validation = await attempt(mcpClient, "limesurvey_validate_participants", { survey_id: primarySurveyId });
+  if (validation && (validation.participant_count < 2 || !Array.isArray(validation.issues))) {
+    results.push({ tool: "limesurvey_validate_participants", status: "failed", error: "Unexpected validation report." });
+  }
   await attempt(mcpClient, "limesurvey_get_participant_properties", {
     survey_id: primarySurveyId,
     query: { token: `${stamp}R` },
@@ -500,6 +505,21 @@ try {
   }
 
   const emailParticipantId = participantIds[1];
+  // Dry run first: it must not send mail and must not call the RemoteControl method invite_participants.
+  const preview = await attempt(mcpClient, "limesurvey_invite_participants", {
+    survey_id: primarySurveyId,
+    token_ids: emailParticipantId ? [emailParticipantId] : null,
+    dry_run: true,
+  });
+  if (
+    preview
+    && (preview.dry_run !== true
+      || preview.invite_participants_called !== false
+      || !Array.isArray(preview.would_receive)
+      || (emailParticipantId && !preview.would_receive.some((item) => item.tid === emailParticipantId)))
+  ) {
+    results.push({ tool: "limesurvey_invite_participants", status: "failed", error: "Unexpected dry-run report." });
+  }
   await attempt(mcpClient, "limesurvey_invite_participants", {
     survey_id: primarySurveyId,
     token_ids: emailParticipantId ? [emailParticipantId] : null,
@@ -607,7 +627,7 @@ try {
   await server.close().catch(() => {});
 }
 
-const allTools = 72;
+const allTools = 73;
 const failed = results.filter((item) => item.status === "failed");
 const passed = results.filter((item) => item.status === "passed" || item.status === "expected_error");
 console.log(JSON.stringify({
