@@ -6,8 +6,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
+import { strictInput } from "./input-schema.js";
+import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
 import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
-import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
+import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
@@ -29,12 +31,7 @@ function text(workflow: string, result: JsonValue): WorkflowResult {
 }
 
 function error(workflow: string, value: unknown): WorkflowResult {
-  const result: JsonValue = {
-    status: "error",
-    message: value instanceof Error ? value.message : String(value),
-    ...(value instanceof LimeSurveyError && value.code ? { code: value.code } : {}),
-    ...(value instanceof LimeSurveyError && value.details !== undefined ? { details: value.details } : {}),
-  };
+  const result = { status: "error", ...describeError(value) } as JsonValue;
   return { ...text(workflow, result), isError: true };
 }
 
@@ -54,6 +51,14 @@ async function run(
 
 function objectValue(value: JsonValue): Record<string, JsonValue> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+/** get_summary answers a single statistic with the bare value; tolerate a numeric string or a keyed object. */
+function parseParticipantCount(value: JsonValue): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  const keyed = objectValue(value);
+  return keyed && keyed.token_count !== undefined ? parseParticipantCount(keyed.token_count) : null;
 }
 
 function findDefinition(method: string) {
@@ -237,11 +242,11 @@ export function registerWorkflowTools(
     {
       title: "Find surveys",
       description: "Find visible surveys by ID or title with bounded client-side pagination.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         query: z.string().default("").describe("Case-insensitive survey ID or title fragment."),
         offset: z.number().int().nonnegative().default(0),
         limit: z.number().int().positive().max(100).default(20),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -265,7 +270,7 @@ export function registerWorkflowTools(
     {
       title: "Get survey languages",
       description: "Return the base and additional language codes configured for a survey.",
-      inputSchema: z.object({ survey_id: surveyId }).strict(),
+      inputSchema: strictInput({ survey_id: surveyId }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -289,11 +294,11 @@ export function registerWorkflowTools(
     {
       title: "Add one survey participant",
       description: "Add one participant using a simple participant object.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         participant: z.record(z.string(), jsonValueSchema).describe("Participant fields such as email, firstname, lastname, token, and attributes."),
         create_token: z.boolean().default(true),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -306,14 +311,14 @@ export function registerWorkflowTools(
     {
       title: "List filtered participants",
       description: "List participant rows with explicit filters, selected fields, and bounded pagination.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         conditions: z.record(z.string(), jsonValueSchema).default({}),
         attributes: z.union([z.literal(false), z.array(z.string())]).default(false),
         unused: z.boolean().default(false),
         offset: z.number().int().nonnegative().default(0),
         limit: z.number().int().positive().max(1000).default(100),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -322,11 +327,99 @@ export function registerWorkflowTools(
   );
 
   server.registerTool(
+    "limesurvey_get_participant_table_status",
+    {
+      title: "Get participant table status",
+      description: "Report whether a survey has a participant table, how many participants it holds, and whether the "
+        + "survey is closed-access. Read-only: get_summary(token_count) decides existence (a number means the table "
+        + "exists, the answer \"No available data\" means it does not), get_survey_properties adds access_mode, "
+        + "active, and allowregister on a best-effort basis. Closed access follows access_mode (\"C\") on LimeSurvey "
+        + "versions that have it; otherwise the existence of the participant table decides "
+        + "(closed_access_basis names which). The survey property usetokens is NOT evaluated by LimeSurvey 6.17.11 "
+        + "and is not used here. Without access_mode, a survey without a participant table has open access. "
+        + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
+      inputSchema: strictInput({ survey_id: surveyId }),
+      outputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ survey_id }) => run(config, "get_participant_table_status", async () => {
+      // Existence: Survey::hasTokensTable (models/Survey.php) is what get_summary tests before it answers token_*;
+      // without the table the handler answers "No available data" instead of a number.
+      let exists = true;
+      let participantCount: number | null = null;
+      try {
+        const value = await client.call("get_summary", [survey_id, "token_count"]);
+        participantCount = parseParticipantCount(value);
+        if (participantCount === null) {
+          throw new LimeSurveyError("get_summary returned an unexpected token_count answer.", "UNEXPECTED_RESPONSE", value);
+        }
+      } catch (value) {
+        if (value instanceof LimeSurveyError && value.hints?.hint_code === HINT_NO_PARTICIPANT_TABLE) {
+          exists = false;
+          participantCount = 0;
+        } else {
+          throw value;
+        }
+      }
+
+      // Closed access: SurveyRuntimeHelper requires a token when active === "Y" and access_mode === "C"
+      // (access_mode exists since DB version 636). usetokens is only a column in 6.17.11 and controls nothing.
+      let accessMode: "O" | "C" | null = null;
+      let surveyActive: boolean | null = null;
+      let allowRegister: boolean | null = null;
+      try {
+        const properties = objectValue(await client.call("get_survey_properties", [
+          survey_id,
+          ["access_mode", "active", "allowregister"],
+        ]));
+        if (properties) {
+          if (properties.access_mode === "O" || properties.access_mode === "C") accessMode = properties.access_mode;
+          if (typeof properties.active === "string") surveyActive = properties.active === "Y";
+          if (typeof properties.allowregister === "string") allowRegister = properties.allowregister === "Y";
+        }
+      } catch {
+        accessMode = null;
+      }
+
+      const basis = accessMode === null ? "participant_table" : "access_mode";
+      const closed = accessMode === null ? exists : accessMode === "C";
+      let explanation: string;
+      if (accessMode === null) {
+        explanation = exists
+          ? "The survey has a participant table. This LimeSurvey version does not report access_mode (or it could not be read), so the existing table is taken as closed access."
+          : "The survey has no participant table, so access is open. This LimeSurvey version does not report access_mode (or it could not be read).";
+      } else if (closed) {
+        explanation = exists
+          ? "access_mode is C (closed): participants need a token, and the participant table exists."
+          : "access_mode is C (closed) but no participant table exists, so nobody can take the survey until the table is created (activate_tokens).";
+      } else {
+        explanation = exists
+          ? "access_mode is O (open): anyone with the link can answer; the participant table exists for invitations and optional tokens."
+          : "access_mode is O (open) and no participant table exists.";
+      }
+      return {
+        survey_id,
+        exists,
+        participant_count: participantCount,
+        survey_is_closed_access: closed,
+        closed_access_basis: basis,
+        access_mode: accessMode,
+        survey_active: surveyActive,
+        allow_register: allowRegister,
+        explanation,
+        basis: "participant_count from get_summary(token_count); closed access from access_mode (SurveyRuntimeHelper) or, "
+          + "without it, from the participant table (Survey::hasTokensTable); usetokens is not evaluated by 6.17.11. "
+          + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
+      };
+    }),
+  );
+
+  server.registerTool(
     "limesurvey_list_response_export_formats",
     {
       title: "List response export formats",
       description: "Call the optional list_response_exports LimeSurvey extension to discover plugin-aware export formats.",
-      inputSchema: z.object({}).strict(),
+      inputSchema: strictInput({}),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -345,7 +438,7 @@ export function registerWorkflowTools(
     {
       title: "Export responses to a file",
       description: "Export responses and securely decode the base64 result inside LIMESURVEY_EXPORT_DIR.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.string().min(1),
         language_code: optionalLanguage.default(null),
@@ -357,7 +450,7 @@ export function registerWorkflowTools(
         fields: z.array(z.string()).nullable().default(null),
         additional_options: z.record(z.string(), jsonValueSchema).nullable().default(null),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -373,7 +466,7 @@ export function registerWorkflowTools(
     {
       title: "Export token responses to a file",
       description: "Export responses for selected tokens and securely decode the result inside LIMESURVEY_EXPORT_DIR.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.string().min(1),
         tokens: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
@@ -383,7 +476,7 @@ export function registerWorkflowTools(
         response_type: z.enum(["short", "long"]).default("short"),
         fields: z.array(z.string()).nullable().default(null),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -399,14 +492,14 @@ export function registerWorkflowTools(
     {
       title: "Export statistics to a file",
       description: "Export survey statistics and securely decode the result inside LIMESURVEY_EXPORT_DIR.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.enum(["pdf", "xls", "html"]).default("pdf"),
         language: optionalLanguage.default(null),
         include_graphs: z.enum(["0", "1"]).default("0"),
         group_ids: z.union([z.number().int().positive(), z.array(z.number().int().positive())]).nullable().default(null),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -431,10 +524,10 @@ export function registerWorkflowTools(
         + "get_site_settings(\"versionnumber\") — the latter requires a superadmin service account and degrades to "
         + "permission_level=\"standard\" with instance_version=null otherwise. Call this before relying on file "
         + "export/import or theming tools.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         probe_instance: z.boolean().default(false)
           .describe("Also call list_surveys and get_site_settings to probe live connectivity, auth, and version/permission level."),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -516,11 +609,11 @@ export function registerWorkflowTools(
         + "true and otherwise always fails with a clear EXPORT_UNSUPPORTED error. Prefer property-based "
         + "verification (list_groups, list_questions, get_survey_properties, get_group_properties, "
         + "get_question_properties) over round-trip diffing.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.literal("lss").default("lss").describe("Structure export format."),
         ...exportFileFields,
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },

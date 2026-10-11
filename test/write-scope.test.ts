@@ -265,6 +265,7 @@ const expectedScopes: Record<string, Scope> = {
   limesurvey_get_survey_languages: "none",
   limesurvey_add_participant: "outreach",
   limesurvey_list_filtered_participants: "none",
+  limesurvey_get_participant_table_status: "none",
   limesurvey_list_response_export_formats: "none",
   limesurvey_export_responses_to_file: "none",
   limesurvey_export_responses_by_token_to_file: "none",
@@ -292,7 +293,7 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
   limesurvey_add_group: { survey_id: 1, title: "G" },
   limesurvey_delete_group: { survey_id: 1, group_id: 1, confirm_destructive_action: true },
   limesurvey_import_group: { survey_id: 1, import_data: "AAAA", import_data_type: "lsg" },
-  limesurvey_set_group_properties: { group_id: 1, data: { group_name: "G" } },
+  limesurvey_set_group_properties: { group_id: 1, data: { language: "en", group_name: "G" } },
   limesurvey_delete_question: { question_id: 1, confirm_destructive_action: true },
   limesurvey_import_question: { survey_id: 1, group_id: 1, import_data: "AAAA", import_data_type: "lsq" },
   limesurvey_set_question_properties: { question_id: 1, data: { mandatory: "N" } },
@@ -316,7 +317,7 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
 };
 
 test("[S-01] every registered tool is gated by its documented write scope", async () => {
-  assert.equal(Object.keys(expectedScopes).length, 71);
+  assert.equal(Object.keys(expectedScopes).length, 72);
   const writeTools = Object.entries(expectedScopes).filter(([, scope]) => scope !== "none").map(([name]) => name);
   assert.deepEqual(Object.keys(minimalArguments).sort(), [...writeTools].sort());
 

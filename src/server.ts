@@ -7,7 +7,7 @@ import {
   toolDefinitions,
   type ResponseFormat,
 } from "./tool-definitions.js";
-import { LimeSurveyError, type JsonValue, type LimeSurveyConfig, type LimeSurveyToolResult } from "./types.js";
+import { describeError, type JsonValue, type LimeSurveyConfig, type LimeSurveyToolResult } from "./types.js";
 import { registerWorkflowTools } from "./workflow-tools.js";
 import { registerThemeTools } from "./theme-tools.js";
 import { assertWriteScope } from "./write-scope.js";
@@ -17,6 +17,7 @@ const outputSchema = z.object({
   result: jsonValueSchema,
   truncated: z.boolean().optional(),
   truncation_message: z.string().optional(),
+  warnings: z.array(jsonValueSchema).optional(),
 });
 
 function markdownValue(value: JsonValue): string {
@@ -50,18 +51,10 @@ export function prepareResult(
 function textResult(result: LimeSurveyToolResult, format: ResponseFormat): string {
   if (format === "json") return JSON.stringify(result, null, 2);
   const suffix = result.truncation_message ? `\n\n${result.truncation_message}` : "";
-  return `## ${result.method}\n\n${markdownValue(result.result)}${suffix}`;
-}
-
-function errorMessage(error: unknown): { message: string; code?: string; details?: JsonValue } {
-  if (error instanceof LimeSurveyError) {
-    return {
-      message: error.message,
-      ...(error.code ? { code: error.code } : {}),
-      ...(error.details !== undefined ? { details: error.details } : {}),
-    };
-  }
-  return { message: error instanceof Error ? error.message : String(error) };
+  const warnings = result.warnings?.length
+    ? `\n\n### Warnings\n\n${markdownValue(result.warnings)}`
+    : "";
+  return `## ${result.method}\n\n${markdownValue(result.result)}${suffix}${warnings}`;
 }
 
 export const SERVER_VERSION = "1.3.1";
@@ -90,13 +83,17 @@ export function createServer(
           assertWriteScope(config, `limesurvey_${definition.method}`, rawInput);
           const preparedInput = definition.prepare ? await definition.prepare(rawInput, config) : rawInput;
           const result = await client.call(definition.method, buildRpcParams(definition, preparedInput));
-          const output = prepareResult(definition.method, result, config.maxResponseChars);
+          const warnings = definition.afterCall ? await definition.afterCall(result, preparedInput, client) : undefined;
+          const output: LimeSurveyToolResult = {
+            ...prepareResult(definition.method, result, config.maxResponseChars),
+            ...(warnings && warnings.length > 0 ? { warnings } : {}),
+          };
           return {
             content: [{ type: "text" as const, text: textResult(output, format) }],
             structuredContent: output,
           };
         } catch (error) {
-          const detail = errorMessage(error);
+          const detail = describeError(error);
           const output: LimeSurveyToolResult = {
             method: definition.method,
             result: { status: "error", ...detail } as JsonValue,

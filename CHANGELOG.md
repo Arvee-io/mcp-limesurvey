@@ -15,7 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   outside the server's confirmations. `content` allows building and correcting
   surveys (imports, structure, texts, quotas, theme assignment); `lifecycle`
   adds activation and deletion; `outreach` adds participants, responses,
-  uploads, and email. Every one of the 71 tools has a documented minimum scope
+  uploads, and email. Every one of the 72 tools has a documented minimum scope
   (new `src/write-scope.ts`, single source of truth); a tool without an entry is
   treated as `outreach`. Blocked calls fail before any file read or RPC request
   with `WRITE_SCOPE_INSUFFICIENT`, naming the current and required scope and
@@ -30,8 +30,55 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   New capabilities: `theme_assignment`, `content_changes`,
   `lifecycle_changes`, `participant_outreach`, `file_exports`.
 
+- Based on user feedback, error hints for the `set_*_properties` tools of
+  questions, groups, surveys, language settings, quotas, and participants
+  (new `src/rpc-hints.ts`, verified against the LimeSurvey 6.17.11 source):
+  keys that RemoteControl cannot write (for example question `attributes`,
+  `answeroptions`, `subquestions`, survey `active`, quota `limit`) are rejected
+  before any request with `FIELD_NOT_WRITABLE`, `hint_code`
+  `NOT_WRITABLE_VIA_REMOTECONTROL`, a `hint`, and `writable_fields` on the top
+  level of the error. Other keys that the answer does not contain are returned
+  in a new optional `warnings` output field. Tool descriptions list the
+  writable and non-writable fields.
+- Question and group texts (`question`, `help`, `script`, `group_name`,
+  `description`) are sent as `questionl10ns` / `questiongroupl10ns` for the
+  language in `data.language` (questions: or the `language` parameter), so a
+  text correction no longer blanks the other text field; without a language the
+  call fails with `LANGUAGE_REQUIRED`.
+- "No data" answers (`No valid Data`, `No available data`, `ERR_NO_DATA`) get a
+  `hint_code` and `hint`; `hint_code`, `hint`, and `writable_fields` appear on
+  the top level of errors from official, workflow, and theme tools.
+
+- New read tool `get_participant_table_status` (72 tools in total, write scope
+  `none`), based on user feedback that `usetokens` and the missing participant
+  table were misread: it reports `exists`, `participant_count` and
+  `survey_is_closed_access` with an explanation and its basis. Existence comes
+  from `get_summary(token_count)`; closed access follows `access_mode` where the
+  LimeSurvey release has it and the participant table otherwise
+  (`closed_access_basis`). `usetokens` is not evaluated by LimeSurvey 6.17.11 and
+  is documented as such in `get_survey_properties`.
+- `get_summary` answers "No available data" with `NO_PARTICIPANT_TABLE`
+  (`token_*` statistics, no participant table; access follows `access_mode`) or
+  `NO_RESPONSE_TABLE` (survey not active: never activated or deactivated).
+
+- Optional MCP-only `survey_id` for `get_group_properties` and
+  `get_question_properties` (never sent to LimeSurvey): the server compares it
+  with the result's `sid` (one extra read when the result has none) and fails
+  with `GROUP_SURVEY_MISMATCH` / `QUESTION_SURVEY_MISMATCH`, based on user
+  feedback about reading another survey's object by a wrong ID. Tool
+  definitions gained an optional `afterCall` hook for this.
+- Unknown tool arguments now fail with `Unknown argument: <names>. This tool
+  accepts: <parameters>.` for official, workflow, and theme tools (new
+  `src/input-schema.ts`); other validation messages are unchanged.
+
 ### Changed
 
+- `set_group_properties` with `group_name` or `description` now needs a
+  language (`data.language`); without one LimeSurvey dropped the text
+  silently.
+- The client now raises errors for an object in `status` (validation errors of
+  `set_participant_properties`) and for `{success: false}` (`set_quota_properties`),
+  which it previously returned as results.
 - `LIMESURVEY_READ_ONLY=true` is now an alias for `LIMESURVEY_WRITE_SCOPE=none`.
   Without either variable behavior is unchanged (everything allowed).
 - Based on user feedback, tools that only work locally no longer count as

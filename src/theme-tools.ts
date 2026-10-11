@@ -6,8 +6,9 @@ import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
+import { strictInput } from "./input-schema.js";
 import { jsonValueSchema } from "./tool-definitions.js";
-import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
+import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
@@ -42,12 +43,7 @@ async function run(
     assertWriteScope(config, `limesurvey_${workflow}`);
     return response(workflow, await operation());
   } catch (value) {
-    return response(workflow, {
-      status: "error",
-      message: value instanceof Error ? value.message : String(value),
-      ...(value instanceof LimeSurveyError && value.code ? { code: value.code } : {}),
-      ...(value instanceof LimeSurveyError && value.details !== undefined ? { details: value.details } : {}),
-    }, true);
+    return response(workflow, { status: "error", ...describeError(value) } as JsonValue, true);
   }
 }
 
@@ -518,7 +514,7 @@ async function scanThemesInUse(client: LimeSurveyClient, scanLimit: number): Pro
 }
 
 export function registerThemeTools(server: McpServer, client: LimeSurveyClient, config: LimeSurveyConfig): void {
-  const generateSchema = z.object({
+  const generateSchema = strictInput({
     theme_name: themeNameSchema,
     title: z.string().min(3).max(100).describe("Human-readable title shown in LimeSurvey."),
     description: z.string().min(3).max(500).default("Responsive survey theme generated with LimeSurvey MCP."),
@@ -542,7 +538,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     logo_file_type: z.enum(["png", "jpeg"]).optional(),
     overwrite: z.boolean().default(false),
     confirm_overwrite: z.boolean().default(false),
-  }).strict().superRefine((value, context) => {
+  }).superRefine((value, context) => {
     if ((value.logo_base64 && !value.logo_file_type) || (!value.logo_base64 && value.logo_file_type)) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "logo_base64 and logo_file_type must be supplied together." });
     }
@@ -654,7 +650,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     {
       title: "Validate a generated LimeSurvey survey theme",
       description: "Validate a ZIP inside LIMESURVEY_THEME_DIR for manifest, licensing, archive paths, safe assets, responsive CSS, and LimeSurvey 6/7 compatibility.",
-      inputSchema: z.object({ file_name: z.string().min(5) }).strict(),
+      inputSchema: strictInput({ file_name: z.string().min(5) }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -666,13 +662,13 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     {
       title: "Get LimeSurvey theme publication instructions",
       description: "Return version-aware installation, preview, assignment, accessibility, rollback, and optional community-publication steps for a survey theme.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         theme_name: themeNameSchema,
         package_file_name: z.string().min(5).describe("Generated ZIP file name."),
         installed_limesurvey_version: z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).describe("Version shown in the LimeSurvey administration footer."),
         hosting: z.enum(["self_hosted", "limesurvey_cloud"]),
         publication_scope: z.enum(["instance", "community"]).default("instance"),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -734,11 +730,11 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     {
       title: "Assign an installed theme to a survey",
       description: "Assign an already imported LimeSurvey survey theme through set_survey_properties. This does not upload or install the theme package.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_id: z.number().int().positive(),
         theme_name: themeNameSchema,
         confirm_theme_assignment: z.literal(true).describe("Required acknowledgement that the survey appearance will change."),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -764,10 +760,10 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         + "LIMESURVEY_THEME_DIR, and themes_in_use lists the distinct template names actually assigned to surveys "
         + "visible to this account (via list_surveys + get_survey_properties), which works without a superadmin "
         + "account. Always includes the documented admin-UI fallback for the complete installed-theme list.",
-      inputSchema: z.object({
+      inputSchema: strictInput({
         survey_scan_limit: z.number().int().min(1).max(100).default(25)
           .describe("Maximum number of visible surveys to inspect for their assigned theme."),
-      }).strict(),
+      }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },

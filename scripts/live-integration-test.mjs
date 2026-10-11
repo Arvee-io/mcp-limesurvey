@@ -118,7 +118,7 @@ const generatedExportPaths = [];
 try {
   await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
   const listed = await mcpClient.listTools();
-  if (listed.tools.length !== 71) throw new Error(`Expected 71 tools, received ${listed.tools.length}.`);
+  if (listed.tools.length !== 72) throw new Error(`Expected 72 tools, received ${listed.tools.length}.`);
 
   await invoke(mcpClient, "limesurvey_get_session_key");
   await attempt(mcpClient, "limesurvey_get_available_site_settings");
@@ -327,7 +327,10 @@ try {
     });
   }
 
+  // Before activate_tokens the survey has no participant table; afterwards it exists and is empty.
+  await attempt(mcpClient, "limesurvey_get_participant_table_status", { survey_id: primarySurveyId });
   await invoke(mcpClient, "limesurvey_activate_tokens", { survey_id: primarySurveyId });
+  await attempt(mcpClient, "limesurvey_get_participant_table_status", { survey_id: primarySurveyId });
   const participants = await invoke(mcpClient, "limesurvey_add_participants", {
     survey_id: primarySurveyId,
     participants: [
@@ -604,7 +607,7 @@ try {
   await server.close().catch(() => {});
 }
 
-const allTools = 71;
+const allTools = 72;
 const failed = results.filter((item) => item.status === "failed");
 const passed = results.filter((item) => item.status === "passed" || item.status === "expected_error");
 console.log(JSON.stringify({

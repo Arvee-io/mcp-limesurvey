@@ -52,6 +52,7 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_find_surveys: "none",
   limesurvey_get_survey_languages: "none",
   limesurvey_list_filtered_participants: "none",
+  limesurvey_get_participant_table_status: "none",
   limesurvey_list_response_export_formats: "none",
   limesurvey_get_instance_info: "none",
   limesurvey_export_responses_to_file: "none",

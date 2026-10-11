@@ -5,6 +5,7 @@ import {
   type JsonValue,
   type LimeSurveyConfig,
 } from "./types.js";
+import { interpretNoData } from "./rpc-hints.js";
 
 export type FetchImplementation = typeof fetch;
 
@@ -24,9 +25,36 @@ function errorCode(value: JsonValue | undefined): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+function describeErrorMap(map: { [key: string]: JsonValue }): string {
+  return Object.entries(map)
+    .map(([field, problem]) => {
+      const text = Array.isArray(problem) ? problem.map(String).join(" ") : typeof problem === "string" ? problem : JSON.stringify(problem);
+      return `${field}: ${text}`;
+    })
+    .join("; ");
+}
+
+/**
+ * LimeSurvey 6.17.11 reports errors in more shapes than a status string: set_participant_properties puts the
+ * validation errors object into status (RemoteControl handle, set_participant_properties), and
+ * set_quota_properties answers {success: false, message}. Neither carries an error_code.
+ */
+function structuredErrorMessage(value: JsonValue | undefined): string | undefined {
+  if (!isObject(value)) return undefined;
+  if (value.success === false) {
+    const message = value.message;
+    if (typeof message === "string") return message;
+    if (isObject(message)) return describeErrorMap(message);
+    return "Unknown LimeSurvey error";
+  }
+  if (isObject(value.status) && Object.keys(value.status).length > 0) return describeErrorMap(value.status);
+  return undefined;
+}
+
 function hasApiError(value: JsonValue | undefined): boolean {
   if (!isObject(value)) return false;
   if (errorCode(value)) return true;
+  if (structuredErrorMessage(value) !== undefined) return true;
   if (isObject(value.errors) && Object.keys(value.errors).length > 0) return true;
   const status = statusMessage(value);
   return typeof status === "string"
@@ -62,13 +90,18 @@ export class LimeSurveyClient {
 
     let key = await this.getSessionKey();
     let result = await this.rpc(method, [key, ...params]);
-    if (errorCode(result) === "ERR_INVALID_SESSION" || statusMessage(result) === "Invalid session key") {
+    if (
+      errorCode(result) === "ERR_INVALID_SESSION"
+      || statusMessage(result) === "Invalid session key"
+      // set_quota_properties reports an expired key as {success: false, message: "Invalid session key"}.
+      || (isObject(result) && result.success === false && result.message === "Invalid session key")
+    ) {
       this.sessionKey = undefined;
       this.sessionPromise = undefined;
       key = await this.getSessionKey();
       result = await this.rpc(method, [key, ...params]);
     }
-    this.throwForApiError(method, result);
+    this.throwForApiError(method, params, result);
     return result;
   }
 
@@ -88,7 +121,7 @@ export class LimeSurveyClient {
       this.config.password,
       this.config.authPlugin,
     ]);
-    this.throwForApiError("get_session_key", result);
+    this.throwForApiError("get_session_key", [], result);
     if (typeof result !== "string" || result.length === 0) {
       throw new LimeSurveyError(
         "LimeSurvey did not return a session key. Verify the URL, credentials, auth plugin, and that JSON-RPC is enabled.",
@@ -143,10 +176,11 @@ export class LimeSurveyClient {
     return payload.result;
   }
 
-  private throwForApiError(method: string, result: JsonValue): void {
+  private throwForApiError(method: string, params: JsonValue[], result: JsonValue): void {
     const code = errorCode(result);
     if (!hasApiError(result)) return;
-    const message = statusMessage(result) ?? "Unknown LimeSurvey error";
-    throw new LimeSurveyError(`${method} failed: ${message}`, code, result);
+    const message = statusMessage(result) ?? structuredErrorMessage(result) ?? "Unknown LimeSurvey error";
+    const hints = interpretNoData(method, params, statusMessage(result), code);
+    throw new LimeSurveyError(`${method} failed: ${message}`, code, result, hints);
   }
 }

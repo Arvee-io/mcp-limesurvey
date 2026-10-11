@@ -66,6 +66,29 @@ test("renews an invalid session once and retries the method", async () => {
   assert.deepEqual(methods, ["get_session_key", "get_summary", "get_session_key", "get_summary"]);
 });
 
+test("[S-03] renews the session when set_quota_properties reports an invalid key as success=false", async () => {
+  let sessionNumber = 0;
+  const methods: string[] = [];
+  const mockFetch: typeof fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
+    methods.push(request.method);
+    if (request.method === "get_session_key") {
+      sessionNumber += 1;
+      return jsonResponse(request.id, `session-${sessionNumber}`);
+    }
+    if (request.params[0] === "session-1") {
+      return jsonResponse(request.id, { success: false, message: "Invalid session key" });
+    }
+    return jsonResponse(request.id, { success: true, message: { id: 5, name: "Quota", qlimit: 10 } });
+  };
+  const client = new LimeSurveyClient(config, mockFetch);
+
+  const result = await client.call("set_quota_properties", [5, { qlimit: 10 }]);
+
+  assert.deepEqual(result, { success: true, message: { id: 5, name: "Quota", qlimit: 10 } });
+  assert.deepEqual(methods, ["get_session_key", "set_quota_properties", "get_session_key", "set_quota_properties"]);
+});
+
 test("returns a sanitized connection status instead of the session key", async () => {
   const mockFetch: typeof fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
