@@ -307,11 +307,23 @@ export async function replaceQuestion(
   try {
     // 4. The same code would make import_question fail ("Question title already exist"), so free it first.
     let tempTitle: string | undefined;
+    let targetOrder = oldOrder;
     if (lsq.title.toLowerCase() === oldTitle.toLowerCase()) {
       tempTitle = `RPL${randomUUID().replace(/-/g, "").slice(0, 12)}`;
       state.renameAttempted = true;
       await setFields(client, oldQid, { title: tempTitle }, "title");
       steps.push({ step: "rename_old_question", status: "done", detail: { temporary_title: tempTitle } });
+
+      // set_question_properties renumbers the group (1..n by order, then code) after every saved field, so the
+      // order read in step 2 is stale now. Only the old question carries the value it has now; a tie with the
+      // imported question resolves to the same position once the old one is deleted.
+      failedStep = "read_old_question_order";
+      const renumbered = integer(objectValue(await client.call("get_question_properties", [oldQid, ["question_order"]]))?.question_order);
+      if (renumbered === undefined) {
+        throw new LimeSurveyError("get_question_properties did not report question_order after the rename.", "UNEXPECTED_RESPONSE");
+      }
+      targetOrder = renumbered;
+      steps.push({ step: "read_old_question_order", status: "done", detail: { question_order: targetOrder } });
     } else {
       steps.push({ step: "rename_old_question", status: "skipped", detail: { reason: "the file brings a different code" } });
     }
@@ -325,8 +337,8 @@ export async function replaceQuestion(
 
     // 6. Take the old position (LimeSurvey renumbers the group after the change).
     failedStep = "set_question_order";
-    await setFields(client, newQid, { question_order: oldOrder }, "question_order");
-    steps.push({ step: "set_question_order", status: "done", detail: { question_order: oldOrder } });
+    await setFields(client, newQid, { question_order: targetOrder }, "question_order");
+    steps.push({ step: "set_question_order", status: "done", detail: { question_order: targetOrder } });
 
     // 7. Delete exactly the old question, after reading it back: same survey, main question, the code this call gave it.
     failedStep = "verify_old_question";
