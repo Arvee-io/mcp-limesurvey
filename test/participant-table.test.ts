@@ -149,6 +149,37 @@ test("[S-04] get_summary token_count on a survey without participant table is ex
     const body = result(response.structuredContent);
     assert.equal(body.hint_code, "NO_PARTICIPANT_TABLE");
     assert.match(String(body.hint), /get_participant_table_status/);
+    assert.match(String(body.hint), /access_mode/);
+    assert.doesNotMatch(String(body.hint), /has open access/i);
+  } finally {
+    await session.close();
+  }
+});
+
+test("[S-04] get_summary response statistics hint covers deactivated surveys", async () => {
+  const session = await connected(() => ({ status: "No available data" }));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_get_summary",
+      arguments: { survey_id: 77, statistic: "completed_responses" },
+    });
+    const hint = String(result(response.structuredContent).hint);
+    assert.match(hint, /deactivat/i);
+    assert.doesNotMatch(hint, /because it was never activated/i);
+  } finally {
+    await session.close();
+  }
+});
+
+test("[S-04] tool descriptions do not claim open access without participant table or never-activated only", async () => {
+  const session = await connected(() => ({}));
+  try {
+    const { tools } = await session.client.listTools();
+    const summary = tools.find((tool) => tool.name === "limesurvey_get_summary")?.description ?? "";
+    assert.doesNotMatch(summary, /open access/i);
+    assert.match(summary, /deactivated/i);
+    const status = tools.find((tool) => tool.name === "limesurvey_get_participant_table_status")?.description ?? "";
+    assert.doesNotMatch(status, /A survey without a participant table has open access/);
   } finally {
     await session.close();
   }

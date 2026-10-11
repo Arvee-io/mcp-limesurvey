@@ -277,6 +277,38 @@ test("[S-03] other 'No valid Data' answers get a NO_DATA hint", async () => {
   }
 });
 
+test("[S-03] the get_participant_properties NO_DATA hint blames the property names only", async () => {
+  const session = await connected(() => ({ status: "No valid Data" }));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_get_participant_properties",
+      arguments: { survey_id: 1, query: { token: "abc" }, properties: ["nope"] },
+    });
+    assert.equal(response.isError, true);
+    const hint = String(result(response.structuredContent).hint);
+    assert.match(hint, /participant table/);
+    assert.doesNotMatch(hint, /no participant matched/i);
+  } finally {
+    await session.close();
+  }
+});
+
+test("[S-03] the export_statistics NO_DATA hint makes no claim about activation or responses", async () => {
+  const session = await connected(() => ({ status: "No available data" }));
+  try {
+    const response = await session.client.callTool({
+      name: "limesurvey_export_statistics",
+      arguments: { survey_id: 1 },
+    });
+    assert.equal(response.isError, true);
+    const body = result(response.structuredContent);
+    assert.equal(body.hint_code, "NO_DATA");
+    assert.doesNotMatch(String(body.hint), /activat|no responses yet/i);
+  } finally {
+    await session.close();
+  }
+});
+
 test("[S-03] keys the answer does not contain are returned as a warning", async () => {
   const session = await connected(() => ({ format: true }));
   try {
