@@ -340,7 +340,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_responses_to_file", true, async () => {
+    async (input) => run(config, "export_responses_to_file", false, async () => {
       const definition = findDefinition("export_responses");
       const data = await client.call("export_responses", buildRpcParams(definition, input));
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
@@ -366,7 +366,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_responses_by_token_to_file", true, async () => {
+    async (input) => run(config, "export_responses_by_token_to_file", false, async () => {
       const definition = findDefinition("export_responses_by_token");
       const data = await client.call("export_responses_by_token", buildRpcParams(definition, input));
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
@@ -389,7 +389,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_statistics_to_file", true, async () => {
+    async (input) => run(config, "export_statistics_to_file", false, async () => {
       const definition = findDefinition("export_statistics");
       const data = await client.call("export_statistics", buildRpcParams(definition, input));
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
@@ -498,7 +498,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_survey_to_file", true, async () => {
+    async (input) => run(config, "export_survey_to_file", false, async () => {
       if (!config.enableExperimentalMethods) {
         throw new LimeSurveyError(
           "Core LimeSurvey RemoteControl2 has no export_survey method.",

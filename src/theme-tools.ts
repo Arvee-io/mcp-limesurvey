@@ -560,7 +560,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async (input) => run(config, "generate_survey_theme", true, async () => {
+    async (input) => run(config, "generate_survey_theme", false, async () => {
       if (contrast(input.text_color, input.background_color) < 4.5) {
         throw new LimeSurveyError("text_color and background_color must have a WCAG contrast ratio of at least 4.5:1.");
       }

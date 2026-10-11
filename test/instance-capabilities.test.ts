@@ -283,7 +283,7 @@ test("export_survey_to_file writes the decoded structure to LIMESURVEY_EXPORT_DI
   }
 });
 
-test("get_instance_info and list_installed_themes stay usable in read-only mode, but export_survey_to_file is blocked", async () => {
+test("get_instance_info, list_installed_themes and export_survey_to_file stay usable in read-only mode", async () => {
   const rpcMethods: string[] = [];
   const mockFetch: typeof fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
@@ -306,9 +306,11 @@ test("get_instance_info and list_installed_themes stay usable in read-only mode,
       name: "limesurvey_export_survey_to_file",
       arguments: { survey_id: 123 },
     });
+    // Local-only export tools are exempt from read-only mode: the call reaches the (mocked) RPC and then
+    // fails on the non-base64 mock payload, not on the read-only gate.
     assert.equal(exportResponse.isError, true);
-    assert.match(JSON.stringify(exportResponse.structuredContent), /LIMESURVEY_READ_ONLY/);
-    assert.ok(!rpcMethods.includes("export_survey"));
+    assert.doesNotMatch(JSON.stringify(exportResponse.structuredContent), /LIMESURVEY_READ_ONLY/);
+    assert.ok(rpcMethods.includes("export_survey"));
   } finally {
     await mcpClient.close();
     await server.close();

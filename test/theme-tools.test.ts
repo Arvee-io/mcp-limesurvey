@@ -186,7 +186,7 @@ test("rejects an inherit theme package that is missing the views/ directory", as
   }
 });
 
-test("blocks theme generation in read-only mode but keeps publication guidance available", async () => {
+test("keeps theme generation and publication guidance available in read-only mode", async () => {
   const themeDir = await mkdtemp(path.join(os.tmpdir(), "limesurvey-mcp-theme-readonly-"));
   const { server, mcpClient } = await connected({ ...baseConfig, themeDir, readOnly: true });
   try {
@@ -194,8 +194,7 @@ test("blocks theme generation in read-only mode but keeps publication guidance a
       name: "limesurvey_generate_survey_theme",
       arguments: { theme_name: "readonly_theme", title: "Read-only theme" },
     });
-    assert.equal(generated.isError, true);
-    assert.match(JSON.stringify(generated.structuredContent), /LIMESURVEY_READ_ONLY/);
+    assert.equal(generated.isError, undefined);
 
     const guide = await mcpClient.callTool({
       name: "limesurvey_get_theme_publication_guide",
