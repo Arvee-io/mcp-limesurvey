@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
+import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
 import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
@@ -49,6 +50,14 @@ async function run(
 
 function objectValue(value: JsonValue): Record<string, JsonValue> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+/** get_summary answers a single statistic with the bare value; tolerate a numeric string or a keyed object. */
+function parseParticipantCount(value: JsonValue): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  const keyed = objectValue(value);
+  return keyed && keyed.token_count !== undefined ? parseParticipantCount(keyed.token_count) : null;
 }
 
 function findDefinition(method: string) {
@@ -314,6 +323,94 @@ export function registerWorkflowTools(
     },
     async ({ survey_id, conditions, attributes, unused, offset, limit }) => run(config, "list_filtered_participants", () => client.call("list_participants", [survey_id, offset, limit, unused, attributes, conditions]),
     ),
+  );
+
+  server.registerTool(
+    "limesurvey_get_participant_table_status",
+    {
+      title: "Get participant table status",
+      description: "Report whether a survey has a participant table, how many participants it holds, and whether the "
+        + "survey is closed-access. Read-only: get_summary(token_count) decides existence (a number means the table "
+        + "exists, the answer \"No available data\" means it does not), get_survey_properties adds access_mode, "
+        + "active, and allowregister on a best-effort basis. Closed access follows access_mode (\"C\") on LimeSurvey "
+        + "versions that have it; otherwise the existence of the participant table decides "
+        + "(closed_access_basis names which). The survey property usetokens is NOT evaluated by LimeSurvey 6.17.11 "
+        + "and is not used here. A survey without a participant table has open access. "
+        + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
+      inputSchema: z.object({ survey_id: surveyId }).strict(),
+      outputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ survey_id }) => run(config, "get_participant_table_status", async () => {
+      // Existence: Survey::hasTokensTable (models/Survey.php) is what get_summary tests before it answers token_*;
+      // without the table the handler answers "No available data" instead of a number.
+      let exists = true;
+      let participantCount: number | null = null;
+      try {
+        const value = await client.call("get_summary", [survey_id, "token_count"]);
+        participantCount = parseParticipantCount(value);
+        if (participantCount === null) {
+          throw new LimeSurveyError("get_summary returned an unexpected token_count answer.", "UNEXPECTED_RESPONSE", value);
+        }
+      } catch (value) {
+        if (value instanceof LimeSurveyError && value.hints?.hint_code === HINT_NO_PARTICIPANT_TABLE) {
+          exists = false;
+          participantCount = 0;
+        } else {
+          throw value;
+        }
+      }
+
+      // Closed access: SurveyRuntimeHelper requires a token when active === "Y" and access_mode === "C"
+      // (access_mode exists since DB version 636). usetokens is only a column in 6.17.11 and controls nothing.
+      let accessMode: "O" | "C" | null = null;
+      let surveyActive: boolean | null = null;
+      let allowRegister: boolean | null = null;
+      try {
+        const properties = objectValue(await client.call("get_survey_properties", [
+          survey_id,
+          ["access_mode", "active", "allowregister"],
+        ]));
+        if (properties) {
+          if (properties.access_mode === "O" || properties.access_mode === "C") accessMode = properties.access_mode;
+          if (typeof properties.active === "string") surveyActive = properties.active === "Y";
+          if (typeof properties.allowregister === "string") allowRegister = properties.allowregister === "Y";
+        }
+      } catch {
+        accessMode = null;
+      }
+
+      const basis = accessMode === null ? "participant_table" : "access_mode";
+      const closed = accessMode === null ? exists : accessMode === "C";
+      let explanation: string;
+      if (accessMode === null) {
+        explanation = exists
+          ? "The survey has a participant table. This LimeSurvey version does not report access_mode (or it could not be read), so the existing table is taken as closed access."
+          : "The survey has no participant table, so access is open. This LimeSurvey version does not report access_mode (or it could not be read).";
+      } else if (closed) {
+        explanation = exists
+          ? "access_mode is C (closed): participants need a token, and the participant table exists."
+          : "access_mode is C (closed) but no participant table exists, so nobody can take the survey until the table is created (activate_tokens).";
+      } else {
+        explanation = exists
+          ? "access_mode is O (open): anyone with the link can answer; the participant table exists for invitations and optional tokens."
+          : "access_mode is O (open) and no participant table exists.";
+      }
+      return {
+        survey_id,
+        exists,
+        participant_count: participantCount,
+        survey_is_closed_access: closed,
+        closed_access_basis: basis,
+        access_mode: accessMode,
+        survey_active: surveyActive,
+        allow_register: allowRegister,
+        explanation,
+        basis: "participant_count from get_summary(token_count); closed access from access_mode (SurveyRuntimeHelper) or, "
+          + "without it, from the participant table (Survey::hasTokensTable); usetokens is not evaluated by 6.17.11. "
+          + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
+      };
+    }),
   );
 
   server.registerTool(

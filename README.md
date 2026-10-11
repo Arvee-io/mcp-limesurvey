@@ -8,7 +8,7 @@
 
 A production-oriented [Model Context Protocol](https://modelcontextprotocol.io/)
 server for the [LimeSurvey RemoteControl 2 API](https://www.limesurvey.org/manual/RemoteControl_2_API).
-It exposes all 56 documented RemoteControl methods plus 15 guarded workflow tools
+It exposes all 56 documented RemoteControl methods plus 16 guarded workflow tools
 for discovery, participants, exports, capability detection, and responsive
 survey themes.
 
@@ -17,7 +17,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **71 MCP tools:** official methods plus focused workflow and theme tools
+- **72 MCP tools:** official methods plus focused workflow and theme tools
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
 - **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
   outreach), a legacy read-only switch, and explicit confirmations
@@ -33,9 +33,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 | Area | Tools | Count |
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
-| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info | 10 |
+| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status | 11 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **71** |
+| **Total** | | **72** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -211,12 +211,12 @@ around a block by calling the RemoteControl API directly.
 
 | Write scope | Tools |
 |---|---|
-| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
+| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
 | `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 71 tools are listed (38 + 14 + 7 + 12). A tool that is missing from the
+All 72 tools are listed (39 + 14 + 7 + 12). A tool that is missing from the
 server's scope table is treated as `outreach`. One call is argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
@@ -276,6 +276,16 @@ differ):
 
 Each `set_*_properties` tool description lists its writable and non-writable
 fields.
+
+`limesurvey_get_participant_table_status` answers "does this survey have a
+participant table, and is access closed?" without guessing: `exists` and
+`participant_count` come from `get_summary(token_count)`, and
+`survey_is_closed_access` follows the survey property `access_mode` (`C`) where
+the release has it, otherwise the participant table
+(`closed_access_basis` names which). The survey property `usetokens` is not
+evaluated by LimeSurvey 6.17.11 and says nothing about either. A `get_summary`
+answer "No available data" is reported as `NO_PARTICIPANT_TABLE` (open access)
+or `NO_RESPONSE_TABLE` (survey never activated).
 
 ## Responsive Survey Themes
 
@@ -426,7 +436,7 @@ The 39 automated tests use mocked LimeSurvey JSON-RPC responses and cover:
 No live LimeSurvey credentials are required. Content evaluations must be created
 against a stable test instance; see [evaluations/README.md](evaluations/README.md).
 
-An opt-in live integration runner exercises all 71 tools against disposable,
+An opt-in live integration runner exercises all 72 tools against disposable,
 prefixed test records:
 
 ```bash

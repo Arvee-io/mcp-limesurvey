@@ -15,7 +15,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   outside the server's confirmations. `content` allows building and correcting
   surveys (imports, structure, texts, quotas, theme assignment); `lifecycle`
   adds activation and deletion; `outreach` adds participants, responses,
-  uploads, and email. Every one of the 71 tools has a documented minimum scope
+  uploads, and email. Every one of the 72 tools has a documented minimum scope
   (new `src/write-scope.ts`, single source of truth); a tool without an entry is
   treated as `outreach`. Blocked calls fail before any file read or RPC request
   with `WRITE_SCOPE_INSUFFICIENT`, naming the current and required scope and
@@ -48,6 +48,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - "No data" answers (`No valid Data`, `No available data`, `ERR_NO_DATA`) get a
   `hint_code` and `hint`; `hint_code`, `hint`, and `writable_fields` appear on
   the top level of errors from official, workflow, and theme tools.
+
+- New read tool `get_participant_table_status` (72 tools in total, write scope
+  `none`), based on user feedback that `usetokens` and the missing participant
+  table were misread: it reports `exists`, `participant_count` and
+  `survey_is_closed_access` with an explanation and its basis. Existence comes
+  from `get_summary(token_count)`; closed access follows `access_mode` where the
+  LimeSurvey release has it and the participant table otherwise
+  (`closed_access_basis`). `usetokens` is not evaluated by LimeSurvey 6.17.11 and
+  is documented as such in `get_survey_properties`.
+- `get_summary` answers "No available data" with `NO_PARTICIPANT_TABLE`
+  (`token_*` statistics, open access) or `NO_RESPONSE_TABLE` (never activated).
 
 ### Changed
 

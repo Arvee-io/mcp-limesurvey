@@ -258,7 +258,17 @@ export const toolDefinitions: ToolDefinition[] = [
     p("new_name", string("Name for the copied survey.")),
     p("destination_survey_id", optionalInteger("Optional desired ID for the copy."), null),
   ]),
-  define("get_survey_properties", "Get survey properties", "Read selected survey properties.", "read", [surveyId(), propertyNames("properties", "survey")]),
+  define(
+    "get_survey_properties",
+    "Get survey properties",
+    "Read selected survey properties (any column of the surveys table; unknown names are dropped silently). " +
+      "usetokens is only a stored column in LimeSurvey 6.17.11: the core never evaluates it, so it neither tells " +
+      "whether a participant table exists nor whether the survey is closed. Closed access follows access_mode " +
+      "(\"C\" closed, \"O\" open) and the participant table; use limesurvey_get_participant_table_status for a " +
+      "ready-made answer. Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
+    "read",
+    [surveyId(), propertyNames("properties", "survey")],
+  ),
   define("set_survey_properties", "Set survey properties", `Update editable survey properties.${describeWriteSpec("set_survey_properties")}`, "write", [surveyId(), p("data", jsonObject("Survey property names mapped to new values."))], writeChecks("set_survey_properties")),
   define("activate_survey", "Activate survey", "Activate a survey after LimeSurvey consistency checks.", "write", [
     surveyId(),
@@ -277,7 +287,10 @@ export const toolDefinitions: ToolDefinition[] = [
     p("start", string("Start date/time accepted by LimeSurvey.")),
     p("end", string("End date/time accepted by LimeSurvey.")),
   ]),
-  define("get_summary", "Get survey summary", "Read response and participant summary counters.", "read", [
+  define("get_summary", "Get survey summary", "Read response and participant summary counters. The answer \"No available data\" " +
+    "is not a call error: for token_* statistics it means the survey has no participant table (open access; error hint_code " +
+    "NO_PARTICIPANT_TABLE, check limesurvey_get_participant_table_status), for response statistics it means the survey was " +
+    "never activated (hint_code NO_RESPONSE_TABLE). With statistic=all only the available parts are returned.", "read", [
     surveyId(),
     p("statistic", z.enum(["all", "completed_responses", "incomplete_responses", "full_responses", "token_count", "token_invalid", "token_sent", "token_opted_out", "token_completed", "token_screenout"]).optional().describe("Summary statistic to return."), "all"),
   ]),
