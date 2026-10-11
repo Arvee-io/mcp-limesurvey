@@ -23,6 +23,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   explains that the value is the web server's clock, not the LimeSurvey time
   zone.
 
+- New read tool `verify_survey_against_lss` (write scope `none`), based on user
+  feedback that a survey cannot be exported over RemoteControl: it compares a
+  `.lss` file inside `LIMESURVEY_IMPORT_DIR` (fallback `LIMESURVEY_EXPORT_DIR`,
+  same path check and size limit as `import_data_path`) with the live survey
+  using only `list_groups`, `list_questions`, and `get_question_properties`.
+  Groups, questions, subquestions, answer options, and attributes are matched by
+  code, not by ID. The result has `summary`, `differences` (at most 500, then
+  `truncated=true` and the full `differences_total`), and `limitations`. This
+  makes 74 tools (73 before); tests, README, docs, the live runner, and the
+  S-01 scope table (scope `none`) were adjusted.
+- `export_survey_to_file` asks `export_survey_structure` first and `export_survey`
+  second; the `EXPORT_UNSUPPORTED` error lists why each failed. Researched on
+  2026-10-11: no verified LimeSurvey 6.x plugin exports a `.lss` over
+  RemoteControl; upstream pull request #5384 adds `export_survey_structure` for
+  the 7.x line. A plugin can answer additional methods on the core URL, so the
+  earlier statement that RemoteControl cannot be extended is corrected in the
+  tool description and the README. The description names
+  `verify_survey_against_lss` as the alternative.
+
 ### Documentation
 
 - README section "Limits of RemoteControl": no mail send log, no list of survey

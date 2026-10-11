@@ -17,7 +17,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **73 MCP tools:** official methods plus focused workflow and theme tools
+- **74 MCP tools:** official methods plus focused workflow and theme tools
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
 - **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
   outreach), a legacy read-only switch, and explicit confirmations
@@ -33,9 +33,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 | Area | Tools | Count |
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
-| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation | 12 |
+| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation, survey-vs-.lss verification | 13 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **73** |
+| **Total** | | **74** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -227,12 +227,12 @@ around a block by calling the RemoteControl API directly.
 
 | Write scope | Tools |
 |---|---|
-| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
+| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_verify_survey_against_lss`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
 | `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 73 tools are listed (40 + 14 + 7 + 12). A tool that is missing from the
+All 74 tools are listed (41 + 14 + 7 + 12). A tool that is missing from the
 server's scope table is treated as `outreach`. Two calls are argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
@@ -525,15 +525,48 @@ theme. The response always includes the documented admin-UI fallback
 Its workflow tool is disabled unless the matching LimeSurvey extension is
 installed and `LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true` is set.
 
-`limesurvey_export_survey_to_file` is likewise experimental: core LimeSurvey
-RemoteControl2 has no `export_survey` method at all (verified 2026-07-24
-against api.limesurvey.org and the LimeSurvey source). The tool requires
-`LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true` and only succeeds if a custom
-LimeSurvey plugin provides an equivalent method; otherwise it always fails
-with a structured `EXPORT_UNSUPPORTED` error. Prefer property-based
-verification (`list_groups`, `list_questions`, `get_survey_properties`,
-`get_group_properties`, `get_question_properties`) over round-trip diffing
-against this tool.
+`limesurvey_export_survey_to_file` is likewise experimental: core LimeSurvey 6
+RemoteControl has neither `export_survey` nor `export_survey_structure`
+(verified against the LimeSurvey 6.17.11 source). The tool requires
+`LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true`, asks
+`export_survey_structure` first and `export_survey` second, and only succeeds if
+a plugin on the LimeSurvey side serves one of them; otherwise it fails with a
+structured `EXPORT_UNSUPPORTED` error that lists why each method failed.
+
+State of the art as of 2026-10-11 (research, see the CHANGELOG): there is **no
+verified LimeSurvey 6.x plugin** that exports a `.lss` over RemoteControl. The
+`extendRemoteControl` plugin only offers demo functions and declares LimeSurvey
+3/4; `RemoteManageResponse` and `rcAddReponseCode` only handle responses; the
+REST API (`survey-detail`) returns the editor's JSON model, not an `.lss`. The
+RemoteControl handler class itself cannot be extended by a plugin, but a plugin
+can answer additional methods on the core URL (the `replaceDefaultLink` pattern
+of `RemoteManageResponse`), so an own small plugin offering
+`export_survey_structure(sessionKey, surveyId)` returning the base64 `.lss`
+works with this tool. Upstream, LimeSurvey pull request #5384 (bug #17747, open,
+targeting the 7.x line) adds exactly that method.
+
+Without an export, use `limesurvey_verify_survey_against_lss` (next section).
+
+## Comparing a Survey with a `.lss` File
+
+`limesurvey_verify_survey_against_lss(survey_id, lss_path[, language])` is a
+read-only tool (write scope `none`) for checking an import or a hand-edited
+survey against its source file. `lss_path` must point to a file inside
+`LIMESURVEY_IMPORT_DIR` (or `LIMESURVEY_EXPORT_DIR` as a fallback; same path
+check and size limit as `import_data_path`). The file is read locally; the live
+survey is read with `list_groups`, `list_questions`, and
+`get_question_properties` only.
+
+Groups (name and order), questions (code, type, mandatory, relevance, other,
+text, help, position), subquestions, answer options, and question attributes
+are matched by code, never by ID, because IDs change on import. The result has
+`summary` (counts per area and `attributes.missing_in_live`, `extra_in_live`,
+`changed`), `differences` (`kind`, `group`, `question`, `item`, `field`, `lss`,
+`live`), `differences_total`, `truncated` (at most 500 differences are listed,
+never cut silently), and `limitations` (conditions, quotas, assessments, default
+values, and survey settings are not compared). `language` defaults to the base
+language of the live survey. Both the LimeSurvey 6 file layout and older
+exports with the texts in the entity rows are read.
 
 ## Development
 
@@ -560,7 +593,7 @@ The 39 automated tests use mocked LimeSurvey JSON-RPC responses and cover:
 No live LimeSurvey credentials are required. Content evaluations must be created
 against a stable test instance; see [evaluations/README.md](evaluations/README.md).
 
-An opt-in live integration runner exercises all 73 tools against disposable,
+An opt-in live integration runner exercises all 74 tools against disposable,
 prefixed test records:
 
 ```bash

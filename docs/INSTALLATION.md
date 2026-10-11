@@ -192,7 +192,7 @@ npm test
 npm pack --dry-run
 ```
 
-The guarded live suite covers all 73 tools. It creates and deletes prefixed
+The guarded live suite covers all 74 tools. It creates and deletes prefixed
 test records and must only be used on an approved test instance. See
 [Live Integration Testing](LIVE_TESTING.md).
 

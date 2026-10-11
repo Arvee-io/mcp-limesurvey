@@ -9,7 +9,8 @@ import { SERVER_VERSION } from "./server.js";
 import { strictInput } from "./input-schema.js";
 import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
 import { validateParticipants } from "./participant-checks.js";
-import { buildRpcParams, jsonValueSchema, serverUtcOffsetSchema, toolDefinitions } from "./tool-definitions.js";
+import { verifySurveyAgainstLss } from "./survey-verify.js";
+import { buildRpcParams, jsonValueSchema, readImportFile, serverUtcOffsetSchema, toolDefinitions } from "./tool-definitions.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
@@ -139,6 +140,12 @@ function capabilityBlockedBy(config: LimeSurveyConfig): Record<string, JsonValue
     file_exports: configReason(!config.exportDir, "LIMESURVEY_EXPORT_DIR is not set"),
   };
 }
+
+const EXPORT_FACTS = "Facts (checked 2026-10-11): no known 6.x plugin offers a structure export over RemoteControl "
+  + "(no verified plugin known); the RemoteControl handler class itself cannot be extended by a plugin, but a plugin can answer "
+  + "additional methods on the core URL (see LimeSurvey 6.17.11 source). Upstream, LimeSurvey pull request #5384 adds "
+  + "export_survey_structure for the 7.x line (open, not in any release); an own small plugin with that method "
+  + "works with this tool.";
 
 const SERVER_TIME_NOTE = "server_time is the web server's clock in UTC (HTTP Date header). The LimeSurvey time zone "
   + "and its timeadjust offset are readable through RemoteControl only for superadmins (get_site_settings('timeadjust')).";
@@ -651,12 +658,13 @@ export function registerWorkflowTools(
     {
       title: "Export survey structure to a file (experimental)",
       description: "Attempt to export a survey's structure as .lss and write it inside LIMESURVEY_EXPORT_DIR, "
-        + "returning a path instead of base64. Core LimeSurvey RemoteControl2 has no export_survey method "
-        + "(verified 2026-07-24 against api.limesurvey.org and the LimeSurvey source); this tool only works if a "
-        + "custom plugin exposes an equivalent RPC method, so it requires LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS="
-        + "true and otherwise always fails with a clear EXPORT_UNSUPPORTED error. Prefer property-based "
-        + "verification (list_groups, list_questions, get_survey_properties, get_group_properties, "
-        + "get_question_properties) over round-trip diffing.",
+        + "returning a path instead of base64. Core LimeSurvey 6 RemoteControl has neither export_survey nor "
+        + "export_survey_structure (verified against the LimeSurvey 6.17.11 source). The tool asks "
+        + "export_survey_structure(sessionKey, surveyId) first and export_survey(sessionKey, surveyId) second, so it "
+        + "only works if a plugin on the LimeSurvey side serves one of them; it requires "
+        + "LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true and otherwise fails with EXPORT_UNSUPPORTED. " + EXPORT_FACTS
+        + " Without an export, limesurvey_verify_survey_against_lss compares a .lss file with the live survey using "
+        + "read-only calls only.",
       inputSchema: strictInput({
         survey_id: surveyId,
         document_type: z.literal("lss").default("lss").describe("Structure export format."),
@@ -668,32 +676,75 @@ export function registerWorkflowTools(
     async (input) => run(config, "export_survey_to_file", async () => {
       if (!config.enableExperimentalMethods) {
         throw new LimeSurveyError(
-          "Core LimeSurvey RemoteControl2 has no export_survey method.",
+          "Core LimeSurvey RemoteControl2 has no export_survey and no export_survey_structure method.",
           "EXPORT_UNSUPPORTED",
           {
-            recovery: "Verify the survey via list_groups, list_questions, and "
-              + "get_survey_properties/get_group_properties/get_question_properties (property-based verification). "
-              + "Only if the instance has an extension providing export_survey, set "
-              + "LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true.",
+            recovery: "Compare a .lss file with the live survey using limesurvey_verify_survey_against_lss, or verify "
+              + "via list_groups, list_questions, and get_survey_properties/get_group_properties/get_question_properties "
+              + "(property-based verification). Only if the instance has a plugin providing export_survey_structure "
+              + "or export_survey, set LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true. " + EXPORT_FACTS,
           },
         );
       }
-      let data: JsonValue;
-      try {
-        data = await client.call("export_survey", [input.survey_id]);
-      } catch (value) {
+      let data: JsonValue | undefined;
+      const causes: Record<string, string> = {};
+      for (const method of ["export_survey_structure", "export_survey"]) {
+        try {
+          const value = await client.call(method, [input.survey_id]);
+          if (typeof value === "string" && value !== "") {
+            data = value;
+            break;
+          }
+          causes[method] = "The answer was not a base64 string.";
+        } catch (value) {
+          causes[method] = value instanceof Error ? value.message : String(value);
+        }
+      }
+      if (data === undefined) {
         throw new LimeSurveyError(
-          "This LimeSurvey instance does not support structural survey export via RemoteControl2.",
+          "This LimeSurvey instance does not support structural survey export via RemoteControl2 "
+            + "(neither export_survey_structure nor export_survey answered with a file).",
           "EXPORT_UNSUPPORTED",
           {
-            recovery: "Verify the survey via list_groups, list_questions, and "
-              + "get_survey_properties/get_group_properties/get_question_properties (property-based verification), "
-              + "or export manually via the LimeSurvey admin UI (Display/Export > Survey structure (.lss)).",
-            cause: value instanceof Error ? value.message : String(value),
+            recovery: "Compare a .lss file with the live survey using limesurvey_verify_survey_against_lss, or verify "
+              + "via list_groups, list_questions, and get_survey_properties/get_group_properties/get_question_properties "
+              + "(property-based verification), or export manually via the LimeSurvey admin UI (Display/Export > "
+              + "Survey structure (.lss)). " + EXPORT_FACTS,
+            causes,
           },
         );
       }
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
+    }),
+  );
+
+  server.registerTool(
+    "limesurvey_verify_survey_against_lss",
+    {
+      title: "Compare a survey with a .lss file",
+      description: "Read-only comparison of the live survey with a LimeSurvey structure file (.lss). The file must be "
+        + "inside LIMESURVEY_IMPORT_DIR (LIMESURVEY_EXPORT_DIR as a fallback; same path check and size limit as "
+        + "import_data_path). The live survey is read with list_groups, list_questions and get_question_properties "
+        + "only. Groups (name and order), questions (code, type, mandatory, relevance, other, text, help, position), "
+        + "subquestions, answer options and question attributes are matched by code, never by ID, because IDs change "
+        + "on import. Returns { survey_id, lss_file, language, summary { groups, questions, subquestions, answers, "
+        + "attributes { missing_in_live, extra_in_live, changed } }, differences [{ kind, group, question, item, "
+        + "field, lss, live }], differences_total, truncated, limitations }. At most 500 differences are listed; "
+        + "truncated=true says more exist and differences_total holds the full number. limitations names what is "
+        + "not compared (conditions, quotas, assessments, ...). language defaults to the base language of the live "
+        + "survey. Use it to check an import or a hand-edited survey against its source file.",
+      inputSchema: strictInput({
+        survey_id: surveyId,
+        lss_path: z.string().min(1).describe("Path of the .lss file inside LIMESURVEY_IMPORT_DIR (or LIMESURVEY_EXPORT_DIR)."),
+        language: z.string().min(1).optional().describe("Language code to compare; default: base language of the live survey."),
+      }),
+      outputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ survey_id, lss_path, language }) => run(config, "verify_survey_against_lss", async () => {
+      const buffer = await readImportFile(config, lss_path, "lss_path");
+      const xml = buffer.toString("utf8").replace(/^\uFEFF/, "");
+      return verifySurveyAgainstLss(client, survey_id, lss_path, xml, language, config.maxResponseChars);
     }),
   );
 }

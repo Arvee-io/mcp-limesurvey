@@ -272,6 +272,21 @@ async function prepareImportData(
     );
   }
 
+  const buffer = await readImportFile(config, importDataPath);
+  const { import_data_path: _omit, ...rest } = input;
+  return { ...rest, import_data: buffer.toString("base64") };
+}
+
+/**
+ * Reads a file from LIMESURVEY_IMPORT_DIR (fallback LIMESURVEY_EXPORT_DIR). The path must stay inside that
+ * directory and the file must not exceed LIMESURVEY_MAX_IMPORT_BYTES. Shared by the import tools and
+ * verify_survey_against_lss; every failure happens before any RPC.
+ */
+export async function readImportFile(
+  config: LimeSurveyConfig,
+  relativePath: string,
+  parameter = "import_data_path",
+): Promise<Buffer> {
   const importDir = config.importDir ?? config.exportDir;
   if (!importDir) {
     throw new LimeSurveyError(
@@ -286,11 +301,11 @@ async function prepareImportData(
   }
 
   const root = path.resolve(importDir);
-  const target = path.resolve(root, importDataPath);
+  const target = path.resolve(root, relativePath);
   const relative = path.relative(root, target);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new LimeSurveyError(
-      "import_data_path resolves outside the configured import directory.",
+      `${parameter} resolves outside the configured import directory.`,
       "IMPORT_PATH_OUTSIDE_DIR",
       { recovery: `Use a path inside ${root}.` },
     );
@@ -315,9 +330,7 @@ async function prepareImportData(
       { recovery: `Limit is ${maxBytes} bytes (LIMESURVEY_MAX_IMPORT_BYTES). Reduce the file size or raise the limit.` },
     );
   }
-
-  const { import_data_path: _omit, ...rest } = input;
-  return { ...rest, import_data: buffer.toString("base64") };
+  return buffer;
 }
 
 export const toolDefinitions: ToolDefinition[] = [
