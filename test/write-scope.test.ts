@@ -279,6 +279,7 @@ const expectedScopes: Record<string, Scope> = {
   limesurvey_get_theme_publication_guide: "none",
   limesurvey_assign_survey_theme: "content",
   limesurvey_list_installed_themes: "none",
+  limesurvey_replace_question: "content",
 };
 
 // Minimal valid arguments (including confirmation literals) for every tool above "none".
@@ -316,10 +317,17 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
   limesurvey_cpd_importParticipants: { participants: [{ email: "a@example.test" }] },
   limesurvey_add_participant: { survey_id: 1, participant: { email: "a@example.test" } },
   limesurvey_assign_survey_theme: { survey_id: 1, theme_name: "acme_theme", confirm_theme_assignment: true },
+  limesurvey_replace_question: {
+    survey_id: 1,
+    question_id: 1,
+    import_data: "AAAA",
+    import_data_type: "lsq",
+    confirm_destructive_action: true,
+  },
 };
 
 test("[S-01] every registered tool is gated by its documented write scope", async () => {
-  assert.equal(Object.keys(expectedScopes).length, 74);
+  assert.equal(Object.keys(expectedScopes).length, 75);
   const writeTools = Object.entries(expectedScopes).filter(([, scope]) => scope !== "none").map(([name]) => name);
   assert.deepEqual(Object.keys(minimalArguments).sort(), [...writeTools].sort());
 

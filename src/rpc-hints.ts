@@ -101,8 +101,8 @@ const WRITE_SPECS: Record<string, WriteSpec> = {
     solution:
       "Question attributes, answer options and subquestions can only be changed by re-importing the question " +
       "(limesurvey_import_question, or limesurvey_import_group / limesurvey_import_survey, all with import_data_path) " +
-      "or in the LimeSurvey admin UI; limesurvey_replace_question, if available, can replace a question of an " +
-      "inactive survey. Localized texts (question, help, script) are written with a language: " +
+      "or in the LimeSurvey admin UI; limesurvey_replace_question swaps a question of an inactive survey for the " +
+      "question in a .lsq file (inactive surveys only). Localized texts (question, help, script) are written with a language: " +
       "{\"language\": \"de\", \"question\": \"...\"} or {\"questionl10ns\": {\"de\": {\"question\": \"...\"}}}.",
     notes:
       "question, help and script are localized: pass them with data.language (or the language parameter); the server " +

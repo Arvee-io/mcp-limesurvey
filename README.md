@@ -17,7 +17,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **74 MCP tools:** official methods plus focused workflow and theme tools
+- **75 MCP tools:** official methods plus focused workflow and theme tools
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
 - **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
   outreach), a legacy read-only switch, and explicit confirmations
@@ -33,9 +33,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 | Area | Tools | Count |
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
-| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation, survey-vs-.lss verification | 13 |
+| Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation, survey-vs-.lss verification, question replacement | 14 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **74** |
+| **Total** | | **75** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -228,11 +228,11 @@ around a block by calling the RemoteControl API directly.
 | Write scope | Tools |
 |---|---|
 | `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_verify_survey_against_lss`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
-| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme` |
+| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 74 tools are listed (41 + 14 + 7 + 12). A tool that is missing from the
+All 74 tools are listed (41 + 15 + 7 + 12). A tool that is missing from the
 server's scope table is treated as `outreach`. Two calls are argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
@@ -461,6 +461,40 @@ ID embedded in the file when that ID is free, `destination_survey_id`
 overrides it when set, and on an ID collision LimeSurvey silently assigns a
 random 6-digit `sid` instead of failing.
 
+## Replacing a Question
+
+`set_question_properties` cannot write question attributes, answer options, or
+subquestions. `limesurvey_replace_question` (write scope `content`) swaps one
+main question of an **inactive** survey for the question in a `.lsq` file, in
+the same group and at the same position. Arguments: `survey_id`, `question_id`,
+`import_data` or `import_data_path` (same rules as the imports above),
+`import_data_type` (`lsq`), and `confirm_destructive_action=true` (required: the
+old question is deleted). The code, type, texts, attributes, answer options,
+and subquestions come from the file; the mandatory flag is read from the file
+and passed on, because `import_question` always overwrites it.
+
+The tool uses only official RemoteControl methods, in this order:
+`get_survey_properties` (`active` must be `N`, otherwise `SURVEY_ACTIVE`),
+`get_question_properties` (the question must belong to `survey_id`, otherwise
+`QUESTION_SURVEY_MISMATCH`, and be a main question, otherwise
+`NOT_A_MAIN_QUESTION`), `list_questions`, then the local parse of the file;
+if the file has the same code, a temporary code for the old question
+(`set_question_properties`), `import_question`, `set_question_properties`
+(`question_order` of the old question), a read-back of the old question,
+`delete_question`, and a verification (`get_question_properties`,
+`list_questions`). The only question that can be deleted is `question_id`.
+
+Every failure after the first write is rolled back: the question this call
+imported is deleted and the old code is restored. The error
+(`REPLACE_QUESTION_FAILED`) names the failed step and the rollback steps; if a
+rollback step failed too, `details.manual_cleanup` lists what to fix by hand.
+`delete_question` refuses a question that other questions depend on through
+legacy conditions, which also rolls the replacement back. The result has
+`survey_id`, `group_id`, `old_question_id`, `new_question_id`, `title`,
+`question_order`, `steps`, `verification`, and `notes`. Question IDs change;
+references by code (relevance expressions) keep working; legacy conditions that
+reference the old question ID are not migrated.
+
 ## Capability Detection
 
 The server prints a startup preflight to stderr for every optional directory
@@ -600,7 +634,7 @@ The 39 automated tests use mocked LimeSurvey JSON-RPC responses and cover:
 No live LimeSurvey credentials are required. Content evaluations must be created
 against a stable test instance; see [evaluations/README.md](evaluations/README.md).
 
-An opt-in live integration runner exercises all 74 tools against disposable,
+An opt-in live integration runner exercises all 75 tools against disposable,
 prefixed test records:
 
 ```bash

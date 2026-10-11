@@ -9,6 +9,7 @@ import { SERVER_VERSION } from "./server.js";
 import { strictInput } from "./input-schema.js";
 import { HINT_NO_PARTICIPANT_TABLE } from "./rpc-hints.js";
 import { validateParticipants } from "./participant-checks.js";
+import { replaceQuestion } from "./replace-question.js";
 import { verifySurveyAgainstLss } from "./survey-verify.js";
 import { buildRpcParams, jsonValueSchema, readImportFile, serverUtcOffsetSchema, toolDefinitions } from "./tool-definitions.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
@@ -752,5 +753,44 @@ export function registerWorkflowTools(
       const xml = buffer.toString("utf8").replace(/^\uFEFF/, "");
       return verifySurveyAgainstLss(client, survey_id, lss_path, xml, language, config.maxResponseChars);
     }),
+  );
+
+  server.registerTool(
+    "limesurvey_replace_question",
+    {
+      title: "Replace a question with a .lsq file",
+      description: "Replace one main question of an INACTIVE survey by the question in a .lsq file, in the same group "
+        + "and at the same position, using only official RemoteControl methods. This is how question attributes, "
+        + "answer options and subquestions are changed, because set_question_properties cannot write them. Steps: "
+        + "check that the survey is inactive (get_survey_properties); read the old question (get_question_properties; "
+        + "it must belong to survey_id and have parent_qid 0); read the group (list_questions); parse the file; if the "
+        + "file has the same code, give the old question a temporary code (set_question_properties); import_question "
+        + "(the new question goes to the end of the group; its mandatory flag is taken from the file because "
+        + "import_question always overwrites it); set_question_properties question_order to the old position; read the "
+        + "old question back and delete_question exactly that question; verify the result. The code, type, texts, "
+        + "attributes, answer options and subquestions come from the file (new_question_title is not offered). Any "
+        + "failure after the first write is rolled back (the question this call imported is deleted, the old code is "
+        + "restored); the error says which step failed and, if a rollback step failed too, lists manual_cleanup. The "
+        + "only question that can be deleted is question_id. Requires confirm_destructive_action=true and the write "
+        + "scope content. Question IDs change; references by code (relevance expressions) keep working; legacy "
+        + "conditions that reference the old question ID are not migrated, and delete_question refuses a question "
+        + "that other questions depend on through legacy conditions (the replacement is then rolled back). Exactly one "
+        + "of import_data (small base64 payload) or import_data_path (file inside LIMESURVEY_IMPORT_DIR) must be set.",
+      inputSchema: strictInput({
+        survey_id: surveyId,
+        question_id: z.number().int().positive().describe("ID of the main question to replace; it must belong to survey_id."),
+        import_data: z.string().min(1).optional()
+          .describe("Base64-encoded .lsq file contents for small files; omit when using import_data_path."),
+        import_data_path: z.string().min(1).optional()
+          .describe("Path of the .lsq file inside LIMESURVEY_IMPORT_DIR (or LIMESURVEY_EXPORT_DIR as a fallback)."),
+        import_data_type: z.literal("lsq").default("lsq").describe("Import type; only lsq."),
+        confirm_destructive_action: z.literal(true)
+          .describe("Required acknowledgement that the old question is deleted permanently."),
+      }),
+      outputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ survey_id, question_id, import_data, import_data_path }) => run(config, "replace_question",
+      () => replaceQuestion(client, config, { survey_id, question_id, import_data, import_data_path })),
   );
 }

@@ -118,7 +118,7 @@ const generatedExportPaths = [];
 try {
   await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
   const listed = await mcpClient.listTools();
-  if (listed.tools.length !== 74) throw new Error(`Expected 74 tools, received ${listed.tools.length}.`);
+  if (listed.tools.length !== 75) throw new Error(`Expected 75 tools, received ${listed.tools.length}.`);
 
   await invoke(mcpClient, "limesurvey_get_session_key");
   await attempt(mcpClient, "limesurvey_get_available_site_settings");
@@ -262,6 +262,19 @@ try {
     data: { mandatory: "N" },
     language: "en",
   });
+
+  // Replace the question of the (still inactive) test survey with a file that has the same code: this exercises
+  // the rename, import, reorder, delete and verification steps. The new question must keep code and position.
+  const replaced = await attempt(mcpClient, "limesurvey_replace_question", {
+    survey_id: primarySurveyId,
+    question_id: questionId,
+    import_data: Buffer.from(questionXml.replace("<title><![CDATA[Q00]]></title>", "<title><![CDATA[MCPTEXT]]></title>")).toString("base64"),
+    import_data_type: "lsq",
+    confirm_destructive_action: true,
+  });
+  if (replaced && (replaced.verification?.ok !== true || replaced.title !== "MCPTEXT" || replaced.old_question_id !== questionId)) {
+    throw new Error(`limesurvey_replace_question verification failed: ${JSON.stringify(replaced)}`);
+  }
 
   const disposableQuestion = await attempt(mcpClient, "limesurvey_import_question", {
     survey_id: primarySurveyId,
@@ -632,7 +645,7 @@ try {
   await server.close().catch(() => {});
 }
 
-const allTools = 74;
+const allTools = 75;
 const failed = results.filter((item) => item.status === "failed");
 const passed = results.filter((item) => item.status === "passed" || item.status === "expected_error");
 console.log(JSON.stringify({
