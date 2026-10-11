@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
 import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
-import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
+import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
@@ -29,12 +29,7 @@ function text(workflow: string, result: JsonValue): WorkflowResult {
 }
 
 function error(workflow: string, value: unknown): WorkflowResult {
-  const result: JsonValue = {
-    status: "error",
-    message: value instanceof Error ? value.message : String(value),
-    ...(value instanceof LimeSurveyError && value.code ? { code: value.code } : {}),
-    ...(value instanceof LimeSurveyError && value.details !== undefined ? { details: value.details } : {}),
-  };
+  const result = { status: "error", ...describeError(value) } as JsonValue;
   return { ...text(workflow, result), isError: true };
 }
 

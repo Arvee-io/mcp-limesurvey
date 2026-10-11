@@ -292,7 +292,7 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
   limesurvey_add_group: { survey_id: 1, title: "G" },
   limesurvey_delete_group: { survey_id: 1, group_id: 1, confirm_destructive_action: true },
   limesurvey_import_group: { survey_id: 1, import_data: "AAAA", import_data_type: "lsg" },
-  limesurvey_set_group_properties: { group_id: 1, data: { group_name: "G" } },
+  limesurvey_set_group_properties: { group_id: 1, data: { language: "en", group_name: "G" } },
   limesurvey_delete_question: { question_id: 1, confirm_destructive_action: true },
   limesurvey_import_question: { survey_id: 1, group_id: 1, import_data: "AAAA", import_data_type: "lsq" },
   limesurvey_set_question_properties: { question_id: 1, data: { mandatory: "N" } },

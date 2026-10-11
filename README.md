@@ -239,6 +239,44 @@ Additional confirmation literals are required for high-impact actions:
 
 These MCP-only confirmation fields are never forwarded to LimeSurvey.
 
+## Error Hints and Write Limits
+
+LimeSurvey's `set_*_properties` methods silently drop every key they cannot
+write, and `error_code` does not exist in LimeSurvey 6.17.11. The server
+therefore checks and explains instead of passing the silence through (all
+lists were verified against the LimeSurvey 6.17.11 source; older releases may
+differ):
+
+- **Known non-writable keys are rejected before any request is sent** by
+  `set_question_properties`, `set_group_properties`, `set_survey_properties`,
+  `set_language_properties`, `set_quota_properties`, and
+  `set_participant_properties`. The error has `code: "FIELD_NOT_WRITABLE"` and,
+  on the top level next to `message`, `hint_code:
+  "NOT_WRITABLE_VIA_REMOTECONTROL"`, a `hint` with the way around it (for
+  example: question attributes, answer options, and subquestions can only be
+  changed by re-importing the question or in the admin UI), and
+  `writable_fields`. Unknown keys that are not on the list are not blocked,
+  because releases may add columns; keys the answer does not contain are
+  returned afterwards in `warnings` (`ignored_fields`, or `failed_fields` for
+  fields LimeSurvey reported as not saved).
+- **Localized texts are routed safely.** `question`, `help`, and `script`
+  (questions) and `group_name` and `description` (groups) are moved into
+  `questionl10ns[<language>]` / `questiongroupl10ns[<language>]`, using
+  `data.language` (questions also the `language` parameter). Without a language
+  the call fails with `LANGUAGE_REQUIRED`. This avoids LimeSurvey's legacy
+  form, which resets the text field you did not send to an empty string.
+- **"No data" answers are interpreted.** `No valid Data`, `No available data`,
+  and `ERR_NO_DATA` carry `hint_code` `NOT_WRITABLE_VIA_REMOTECONTROL` (writes),
+  `NO_PARTICIPANT_TABLE` / `NO_RESPONSE_TABLE` (`get_summary`), or `NO_DATA`
+  (everything else) plus a method-specific `hint`.
+- **More error shapes are detected.** An object in `status`
+  (`set_participant_properties` validation errors) and `{success: false,
+  message}` (`set_quota_properties`) now raise errors; `error_code` is still
+  honored for newer LimeSurvey versions.
+
+Each `set_*_properties` tool description lists its writable and non-writable
+fields.
+
 ## Responsive Survey Themes
 
 The theme generator was verified on **2026-07-22** against the current

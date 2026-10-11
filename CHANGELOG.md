@@ -30,8 +30,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   New capabilities: `theme_assignment`, `content_changes`,
   `lifecycle_changes`, `participant_outreach`, `file_exports`.
 
+- Based on user feedback, error hints for the `set_*_properties` tools of
+  questions, groups, surveys, language settings, quotas, and participants
+  (new `src/rpc-hints.ts`, verified against the LimeSurvey 6.17.11 source):
+  keys that RemoteControl cannot write (for example question `attributes`,
+  `answeroptions`, `subquestions`, survey `active`, quota `limit`) are rejected
+  before any request with `FIELD_NOT_WRITABLE`, `hint_code`
+  `NOT_WRITABLE_VIA_REMOTECONTROL`, a `hint`, and `writable_fields` on the top
+  level of the error. Other keys that the answer does not contain are returned
+  in a new optional `warnings` output field. Tool descriptions list the
+  writable and non-writable fields.
+- Question and group texts (`question`, `help`, `script`, `group_name`,
+  `description`) are sent as `questionl10ns` / `questiongroupl10ns` for the
+  language in `data.language` (questions: or the `language` parameter), so a
+  text correction no longer blanks the other text field; without a language the
+  call fails with `LANGUAGE_REQUIRED`.
+- "No data" answers (`No valid Data`, `No available data`, `ERR_NO_DATA`) get a
+  `hint_code` and `hint`; `hint_code`, `hint`, and `writable_fields` appear on
+  the top level of errors from official, workflow, and theme tools.
+
 ### Changed
 
+- `set_group_properties` with `group_name` or `description` now needs a
+  language (`data.language`); without one LimeSurvey dropped the text
+  silently.
+- The client now raises errors for an object in `status` (validation errors of
+  `set_participant_properties`) and for `{success: false}` (`set_quota_properties`),
+  which it previously returned as results.
 - `LIMESURVEY_READ_ONLY=true` is now an alias for `LIMESURVEY_WRITE_SCOPE=none`.
   Without either variable behavior is unchanged (everything allowed).
 - Based on user feedback, tools that only work locally no longer count as

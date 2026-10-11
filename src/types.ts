@@ -48,6 +48,14 @@ export interface LimeSurveyToolResult {
   result: JsonValue;
   truncated?: boolean;
   truncation_message?: string;
+  warnings?: JsonValue[];
+}
+
+/** Machine-readable interpretation attached to an error: what happened, why, and how to get around it. */
+export interface ErrorHints {
+  hint_code: string;
+  hint: string;
+  writable_fields?: string[];
 }
 
 export class LimeSurveyError extends Error {
@@ -55,8 +63,32 @@ export class LimeSurveyError extends Error {
     message: string,
     public readonly code?: string,
     public readonly details?: JsonValue,
+    public readonly hints?: ErrorHints,
   ) {
     super(message);
     this.name = "LimeSurveyError";
   }
+}
+
+/**
+ * The error object every tool returns on failure: message, code, details and, when the error carries
+ * an interpretation, hint_code/hint/writable_fields on the top level next to them.
+ */
+export function describeError(error: unknown): {
+  message: string;
+  code?: string;
+  details?: JsonValue;
+  hint_code?: string;
+  hint?: string;
+  writable_fields?: string[];
+} {
+  if (error instanceof LimeSurveyError) {
+    return {
+      message: error.message,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details !== undefined ? { details: error.details } : {}),
+      ...(error.hints ? error.hints : {}),
+    };
+  }
+  return { message: error instanceof Error ? error.message : String(error) };
 }

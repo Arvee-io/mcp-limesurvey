@@ -7,7 +7,7 @@ import JSZip from "jszip";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { jsonValueSchema } from "./tool-definitions.js";
-import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
+import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
@@ -42,12 +42,7 @@ async function run(
     assertWriteScope(config, `limesurvey_${workflow}`);
     return response(workflow, await operation());
   } catch (value) {
-    return response(workflow, {
-      status: "error",
-      message: value instanceof Error ? value.message : String(value),
-      ...(value instanceof LimeSurveyError && value.code ? { code: value.code } : {}),
-      ...(value instanceof LimeSurveyError && value.details !== undefined ? { details: value.details } : {}),
-    }, true);
+    return response(workflow, { status: "error", ...describeError(value) } as JsonValue, true);
   }
 }
 

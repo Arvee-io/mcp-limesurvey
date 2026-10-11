@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { LimeSurveyClient } from "./client.js";
+import { describeWriteSpec, prepareWriteInput, writeWarnings } from "./rpc-hints.js";
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 
 export type ResponseFormat = "json" | "markdown";
@@ -18,6 +20,11 @@ export interface ToolDefinition {
   inputSchema: z.ZodObject<z.ZodRawShape>;
   parameters: ParameterDefinition[];
   prepare?: (input: Record<string, unknown>, config: LimeSurveyConfig) => Promise<Record<string, unknown>>;
+  /**
+   * Runs after a successful RPC with the prepared input. Returns warnings to attach to the result, or throws a
+   * LimeSurveyError to turn the answer into an error.
+   */
+  afterCall?: (result: JsonValue, input: Record<string, unknown>, client: LimeSurveyClient) => Promise<JsonValue[] | undefined>;
   annotations: {
     readOnlyHint: boolean;
     destructiveHint: boolean;
@@ -63,6 +70,7 @@ function define(
   parameters: ParameterDefinition[] = [],
   options: {
     prepare?: ToolDefinition["prepare"];
+    afterCall?: ToolDefinition["afterCall"];
     extraSchema?: Record<string, z.ZodTypeAny>;
   } = {},
 ): ToolDefinition {
@@ -89,6 +97,7 @@ function define(
     inputSchema: z.object(shape).strict(),
     parameters,
     ...(options.prepare ? { prepare: options.prepare } : {}),
+    ...(options.afterCall ? { afterCall: options.afterCall } : {}),
     annotations: {
       readOnlyHint: access === "read",
       destructiveHint: access === "delete",
@@ -104,6 +113,14 @@ const questionId = () => p("question_id", positiveInteger("Numeric question ID."
 const language = (key = "language") => p(key, optionalString("LimeSurvey language code; null uses the survey default."), null);
 const propertyNames = (key: string, resource: string) =>
   p(key, optionalStringArray(`Properties to return for the ${resource}; null returns all available properties.`), null);
+
+/** prepare/afterCall pair for the six set_*_properties tools (write hints, L10n routing, dropped-key warnings). */
+function writeChecks(method: string): Pick<NonNullable<Parameters<typeof define>[5]>, "prepare" | "afterCall"> {
+  return {
+    prepare: (input) => prepareWriteInput(method, input),
+    afterCall: async (result, input) => writeWarnings(method, result, input),
+  };
+}
 
 const maxInlineImportChars = 200_000;
 
@@ -242,7 +259,7 @@ export const toolDefinitions: ToolDefinition[] = [
     p("destination_survey_id", optionalInteger("Optional desired ID for the copy."), null),
   ]),
   define("get_survey_properties", "Get survey properties", "Read selected survey properties.", "read", [surveyId(), propertyNames("properties", "survey")]),
-  define("set_survey_properties", "Set survey properties", "Update editable survey properties.", "write", [surveyId(), p("data", jsonObject("Survey property names mapped to new values."))]),
+  define("set_survey_properties", "Set survey properties", `Update editable survey properties.${describeWriteSpec("set_survey_properties")}`, "write", [surveyId(), p("data", jsonObject("Survey property names mapped to new values."))], writeChecks("set_survey_properties")),
   define("activate_survey", "Activate survey", "Activate a survey after LimeSurvey consistency checks.", "write", [
     surveyId(),
     p("activation_settings", jsonObject("Optional activation settings such as anonymized, datestamp, ipaddr, ipanonymize, refurl, and savetimings.").optional(), {}),
@@ -268,7 +285,7 @@ export const toolDefinitions: ToolDefinition[] = [
   define("add_language", "Add survey language", "Add a language to a survey.", "write", [surveyId(), p("language", string("Language code to add."))]),
   define("delete_language", "Delete survey language", "Remove a non-base language from a survey.", "delete", [surveyId(), p("language", string("Language code to remove."))]),
   define("get_language_properties", "Get language properties", "Read localized survey properties.", "read", [surveyId(), propertyNames("properties", "survey language"), language()]),
-  define("set_language_properties", "Set language properties", "Update localized survey properties.", "write", [surveyId(), p("data", jsonObject("Localized property names mapped to new values.")), language()]),
+  define("set_language_properties", "Set language properties", `Update localized survey properties.${describeWriteSpec("set_language_properties")}`, "write", [surveyId(), p("data", jsonObject("Localized property names mapped to new values.")), language()], writeChecks("set_language_properties")),
 
   define("add_group", "Create question group", "Add an empty question group to a survey.", "write", [surveyId(), p("title", string("Question-group title.")), p("description", z.string().optional().describe("Question-group description."), "")]),
   define("delete_group", "Delete question group", "Delete a question group from a survey.", "delete", [surveyId(), groupId()]),
@@ -288,7 +305,7 @@ export const toolDefinitions: ToolDefinition[] = [
     { prepare: prepareImportData, extraSchema: { import_data_path: importDataPathSchema("question group") } },
   ),
   define("get_group_properties", "Get group properties", "Read selected question-group properties.", "read", [groupId(), propertyNames("properties", "question group"), language()]),
-  define("set_group_properties", "Set group properties", "Update question-group properties.", "write", [groupId(), p("data", jsonObject("Group property names mapped to new values."))]),
+  define("set_group_properties", "Set group properties", `Update question-group properties.${describeWriteSpec("set_group_properties")}`, "write", [groupId(), p("data", jsonObject("Group property names mapped to new values."))], writeChecks("set_group_properties")),
 
   define("delete_question", "Delete question", "Delete a question from its survey.", "delete", [questionId()]),
   define(
@@ -309,7 +326,7 @@ export const toolDefinitions: ToolDefinition[] = [
     { prepare: prepareImportData, extraSchema: { import_data_path: importDataPathSchema("question") } },
   ),
   define("get_question_properties", "Get question properties", "Read selected question properties.", "read", [questionId(), propertyNames("properties", "question"), language()]),
-  define("set_question_properties", "Set question properties", "Update question properties.", "write", [questionId(), p("data", jsonObject("Question property names mapped to new values.")), language()]),
+  define("set_question_properties", "Set question properties", `Update question properties.${describeWriteSpec("set_question_properties")}`, "write", [questionId(), p("data", jsonObject("Question property names mapped to new values.")), language()], writeChecks("set_question_properties")),
 
   define("activate_tokens", "Activate participant table", "Create the survey participant table and optional custom attributes.", "write", [surveyId(), p("attribute_fields", z.array(z.number().int().positive()).optional().describe("Additional participant attribute field numbers."), [])]),
   define("add_participants", "Add survey participants", "Add one or more participants to a survey.", "write", [
@@ -323,7 +340,7 @@ export const toolDefinitions: ToolDefinition[] = [
     p("query", jsonObject("Participant lookup properties, such as token or tid.")),
     propertyNames("properties", "participant"),
   ]),
-  define("set_participant_properties", "Set participant properties", "Update a participant matched by token or token-table ID.", "write", [surveyId(), p("query", jsonObject("Participant lookup properties.")), p("data", jsonObject("Participant properties to update."))]),
+  define("set_participant_properties", "Set participant properties", `Update a participant matched by token or token-table ID.${describeWriteSpec("set_participant_properties")}`, "write", [surveyId(), p("query", jsonObject("Participant lookup properties.")), p("data", jsonObject("Participant properties to update."))], writeChecks("set_participant_properties")),
   define("list_participants", "List survey participants", "List and filter survey participants with server-side pagination.", "read", [
     surveyId(),
     p("start", z.number().int().nonnegative().optional().describe("Zero-based result offset."), 0),
@@ -361,7 +378,7 @@ export const toolDefinitions: ToolDefinition[] = [
   ]),
   define("delete_quota", "Delete quota", "Delete a survey quota.", "delete", [p("quota_id", positiveInteger("Numeric quota ID."))]),
   define("get_quota_properties", "Get quota properties", "Read selected quota properties.", "read", [p("quota_id", positiveInteger("Numeric quota ID.")), propertyNames("properties", "quota"), language()]),
-  define("set_quota_properties", "Set quota properties", "Update quota properties.", "write", [p("quota_id", positiveInteger("Numeric quota ID.")), p("data", jsonObject("Quota properties to update."))]),
+  define("set_quota_properties", "Set quota properties", `Update quota properties.${describeWriteSpec("set_quota_properties")}`, "write", [p("quota_id", positiveInteger("Numeric quota ID.")), p("data", jsonObject("Quota properties to update."))], writeChecks("set_quota_properties")),
 
   define("list_surveys", "List surveys", "List surveys visible to a user, optionally filtered by survey group.", "read", [
     p("username", optionalString("Optional administration username; null uses the current service account."), null),
