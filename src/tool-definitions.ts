@@ -342,9 +342,9 @@ export const toolDefinitions: ToolDefinition[] = [
     p("end", string("End date/time accepted by LimeSurvey.")),
   ]),
   define("get_summary", "Get survey summary", "Read response and participant summary counters. The answer \"No available data\" " +
-    "is not a call error: for token_* statistics it means the survey has no participant table (open access; error hint_code " +
-    "NO_PARTICIPANT_TABLE, check limesurvey_get_participant_table_status), for response statistics it means the survey was " +
-    "never activated (hint_code NO_RESPONSE_TABLE). With statistic=all only the available parts are returned.", "read", [
+    "is not a call error: for token_* statistics it means the survey has no participant table (no participant statistics; error hint_code " +
+    "NO_PARTICIPANT_TABLE; access is decided by access_mode, check limesurvey_get_participant_table_status), for response " +
+    "statistics it means the survey has no response table: never activated or deactivated (hint_code NO_RESPONSE_TABLE). With statistic=all only the available parts are returned.", "read", [
     surveyId(),
     p("statistic", z.enum(["all", "completed_responses", "incomplete_responses", "full_responses", "token_count", "token_invalid", "token_sent", "token_opted_out", "token_completed", "token_screenout"]).optional().describe("Summary statistic to return."), "all"),
   ]),

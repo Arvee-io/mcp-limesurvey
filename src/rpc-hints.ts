@@ -387,9 +387,9 @@ const NO_DATA_TEXT: Record<string, string> = {
   get_quota_properties:
     "None of the requested names is a quota property; LimeSurvey drops unknown names silently. Omit properties to read all.",
   get_participant_properties:
-    "None of the requested names is a participant column, or no participant matched. Omit properties to read all.",
+    "None of the requested names is a column of the participant table; LimeSurvey drops unknown names silently. Omit properties to read all.",
   export_statistics:
-    "There is no data to export: typically the survey was never activated (no response table) or has no responses yet.",
+    "LimeSurvey reports no statistics data for this survey. In LimeSurvey 6.17.11 this status is only returned when the question list of the survey cannot be loaded; a survey without responses or without a response table does not produce it.",
   export_timeline:
     "There is nothing to count: typically the survey was never activated (no response table) or has no responses in the range.",
 };
@@ -418,12 +418,15 @@ export function interpretNoData(
         hint_code: HINT_NO_PARTICIPANT_TABLE,
         hint:
           "This survey has no participant table, so participant statistics do not exist. That is not a call error: " +
-          "a survey without a participant table has open access. Check limesurvey_get_participant_table_status.",
+          "whether access is open depends on access_mode on LimeSurvey 6.x (a closed survey without a table admits nobody). " +
+          "Check limesurvey_get_participant_table_status.",
       };
     }
     return {
       hint_code: HINT_NO_RESPONSE_TABLE,
-      hint: "This survey has no response table because it was never activated, so there are no response statistics.",
+      hint:
+        "This survey has no response table: it is not active (never activated, or deactivated - deactivation archives " +
+        "the responses into an old_survey_* table), so there are no response statistics.",
     };
   }
   return {

@@ -336,7 +336,7 @@ export function registerWorkflowTools(
         + "active, and allowregister on a best-effort basis. Closed access follows access_mode (\"C\") on LimeSurvey "
         + "versions that have it; otherwise the existence of the participant table decides "
         + "(closed_access_basis names which). The survey property usetokens is NOT evaluated by LimeSurvey 6.17.11 "
-        + "and is not used here. A survey without a participant table has open access. "
+        + "and is not used here. Without access_mode, a survey without a participant table has open access. "
         + "Verified against the LimeSurvey 6.17.11 source; older releases may differ.",
       inputSchema: strictInput({ survey_id: surveyId }),
       outputSchema,
