@@ -19,8 +19,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
 - **71 MCP tools:** official methods plus focused workflow and theme tools
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
-- **Safe write access:** server-enforced write scopes (
-one, content, lifecycle,
+- **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
   outreach), a legacy read-only switch, and explicit confirmations
 - **Session management:** cached credentials, one retry after an invalid session,
   graceful release, timeouts, and sanitized errors
