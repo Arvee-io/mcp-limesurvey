@@ -341,12 +341,21 @@ The report contains:
   (`send_email=false`), `emailstatus_not_ok` (the value is in `details`),
   `invalid_email_address`, `not_valid_yet` (`validfrom` is after the server
   time), `expired` (`validuntil` is before it), `not_selected` (`token_ids` set,
-  `tid` not in it), and `beyond_maxemails` (only when `maxemails` could be read);
+  `tid` not in it; these participants are only counted, never listed one by
+  one), and `beyond_maxemails` (only when `maxemails` could be read);
 - without `continue_on_error`: `stops_at_tid`, the first participant whose
   validity window fails (LimeSurvey stops sending there), and `not_reached`;
 - `warnings` (blanks at the edges, duplicate addresses among the recipients),
   `limitations`, `time_basis`, and `borderline` (validity limits within 60
-  minutes of the server time).
+  minutes of the server time);
+- `counts` with the full numbers (`would_receive`, `would_not_receive`,
+  `not_reached`, `not_selected`, `by_reason`).
+
+The report stays within `LIMESURVEY_MAX_RESPONSE_CHARS` whatever the table size:
+`would_receive`, `would_not_receive` and `not_reached` list at most 100 entries
+each, `warnings` and `borderline` at most 25. When a list is cut,
+`truncated_lists` names it with `returned` and `total`; `counts` always holds
+the complete numbers. Use `token_ids` to check specific participants.
 
 Known limits, also listed in `limitations`: the block list of the central
 participant database cannot be read through RemoteControl; `maxemails` (default
@@ -365,7 +374,11 @@ addresses (`DUPLICATE_EMAIL`, trimmed and case-insensitive) and tokens
 (`DUPLICATE_TOKEN`), address format (`INVALID_EMAIL`), `NOT_YET_VALID`,
 `EXPIRED`, `INVALID_VALIDITY_RANGE`, `EMAILSTATUS_NOT_OK`, `MISSING_EMAIL`, and
 `MISSING_TOKEN`. It returns `issues` (`tid`, `field`, `code`, `detail`) and
-`counts_by_code`.
+`counts_by_code`. The answer is bound to `LIMESURVEY_MAX_RESPONSE_CHARS`: when
+there are too many issues, `issues` and `borderline` are cut to fit and marked
+with `issues_truncated`, `issues_total`, `issues_returned` and a
+`truncation_note`; `counts_by_code`, `participant_count` and `time_basis` are
+always complete.
 
 ## Responsive Survey Themes
 

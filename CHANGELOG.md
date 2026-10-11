@@ -83,7 +83,11 @@ changes are based on user feedback.
   `token_ids`, `maxemails`). The report lists `would_receive` and
   `would_not_receive` with reasons, `stops_at_tid` and `not_reached` (without
   `continue_on_error` LimeSurvey stops at the first participant whose validity
-  fails), `warnings`, `limitations`, `time_basis`, and `borderline`. A dry run
+  fails), `warnings`, `limitations`, `time_basis`, and `borderline`. The report
+  stays within `LIMESURVEY_MAX_RESPONSE_CHARS` for tables of any size:
+  participants outside `token_ids` are only counted (`not_selected`), and the
+  lists are capped (100 entries; `warnings` and `borderline` 25) with
+  `truncated_lists` and complete `counts`. A dry run
   needs write scope `none` and no `confirm_send_email`. Tool definitions gained
   an optional `override` hook for this; `server_utc_offset_minutes` states the
   UTC offset of the LimeSurvey server.
