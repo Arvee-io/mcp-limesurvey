@@ -20,8 +20,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `get_instance_info` with `probe_instance=true` reports `server_time` (UTC) and
   `server_time_source` (`http_date_header`), based on user feedback; without the
   probe both are `null` and `server_time_hint` says so. `server_time_note`
-  explains that the value is the web server's clock, not the LimeSurvey time
-  zone.
+  explains that the value is the web server's clock in UTC; the PHP time zone
+  is not readable through RemoteControl, only the `timeadjust` offset is (and
+  only by superadmins).
 
 - New read tool `verify_survey_against_lss` (write scope `none`), based on user
   feedback that a survey cannot be exported over RemoteControl: it compares a

@@ -490,7 +490,8 @@ requires a superadmin service account and degrades to
 probe also fills `server_time` (ISO-8601 UTC) and `server_time_source`
 (`"http_date_header"`); without it both are `null` and `server_time_hint` says to
 use `probe_instance=true`. `server_time_note` states that this is the web
-server's clock in UTC, not the LimeSurvey time zone. Call this before relying on
+server's clock in UTC, not a time zone (the PHP time zone is not readable
+through RemoteControl). Call this before relying on
 file export/import or theming tools.
 
 ### Limits of RemoteControl
@@ -505,9 +506,10 @@ in this server:
   upload questions. `get_language_properties` shows which server paths the mail
   attachments reference.
 - No clock method. The server time is only available from the HTTP `Date`
-  header (`get_instance_info` with `probe_instance=true`). The LimeSurvey time
-  zone and `timeadjust` can only be read by superadmins through
-  `get_site_settings('timeadjust')`.
+  header (`get_instance_info` with `probe_instance=true`). The server's PHP time
+  zone is not readable through RemoteControl. Only the `timeadjust` offset (hours
+  between web server time and local time) is readable, and only by superadmins
+  through `get_site_settings('timeadjust')`.
 
 `limesurvey_list_installed_themes` combines two best-effort signals, since
 RemoteControl2 has no official method to enumerate installed themes:
