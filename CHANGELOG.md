@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `get_language_properties` adds `attachments_parsed` next to the unchanged raw
+  `attachments` field, based on user feedback: `{ <mail type>: [ { file_name,
+  url, size, relevance } ] }`. Both storage formats are parsed (JSON string
+  since DB version 647, PHP serialize string on older instances). An empty value
+  gives `{}`; an unparsable one gives `null` and the warning
+  `ATTACHMENTS_UNPARSEABLE`.
+- `get_language_properties` reports requested property names that LimeSurvey
+  dropped silently in the warning `UNKNOWN_FIELDS` (`unknown_fields`).
+
 ## [1.4.0] - 2026-10-12
 
 This release has 73 tools (72 before the participant validation tool). Most

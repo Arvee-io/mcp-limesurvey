@@ -304,6 +304,16 @@ methods take no survey ID): the result's `sid` must match, otherwise the call
 fails with `GROUP_SURVEY_MISMATCH` or `QUESTION_SURVEY_MISMATCH` instead of
 silently returning another survey's object.
 
+`limesurvey_get_language_properties` returns the `attachments` field exactly as
+LimeSurvey stores it (keep it unchanged for a round trip to
+`set_language_properties`) and, when `attachments` is part of the answer, adds
+`attachments_parsed`: `{ <mail type>: [ { file_name, url, size, relevance } ] }`.
+LimeSurvey stores a JSON string since DB version 647; older instances hold a PHP
+serialize string; both are parsed. An empty value gives `{}`, an unparsable one
+`null` plus the warning `ATTACHMENTS_UNPARSEABLE`. Requested property names that
+are not a column are dropped silently by LimeSurvey; the server lists them in the
+warning `UNKNOWN_FIELDS` (`unknown_fields`).
+
 `limesurvey_get_participant_table_status` answers "does this survey have a
 participant table, and is access closed?" without guessing: `exists` and
 `participant_count` come from `get_summary(token_count)`, and

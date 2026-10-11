@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { enrichLanguageProperties, languagePropertiesWarnings } from "./attachments.js";
 import type { LimeSurveyClient } from "./client.js";
 import { strictInput } from "./input-schema.js";
 import { previewInvitation } from "./participant-checks.js";
@@ -27,6 +28,11 @@ export interface ToolDefinition {
    * LimeSurveyError to turn the answer into an error.
    */
   afterCall?: (result: JsonValue, input: Record<string, unknown>, client: LimeSurveyClient) => Promise<JsonValue[] | undefined>;
+  /**
+   * Runs after a successful RPC and returns the result to report (for example the answer plus derived fields).
+   * afterCall still sees the unchanged RPC answer.
+   */
+  enrich?: (result: JsonValue, input: Record<string, unknown>) => JsonValue;
   /**
    * Runs after the write-scope check and prepare, before the RPC. A returned value is the tool result and the
    * RPC (and afterCall) is skipped; undefined continues with the RPC.
@@ -78,6 +84,7 @@ function define(
   options: {
     prepare?: ToolDefinition["prepare"];
     afterCall?: ToolDefinition["afterCall"];
+    enrich?: ToolDefinition["enrich"];
     override?: ToolDefinition["override"];
     extraSchema?: Record<string, z.ZodTypeAny>;
   } = {},
@@ -122,6 +129,7 @@ function define(
     parameters,
     ...(options.prepare ? { prepare: options.prepare } : {}),
     ...(options.afterCall ? { afterCall: options.afterCall } : {}),
+    ...(options.enrich ? { enrich: options.enrich } : {}),
     ...(options.override ? { override: options.override } : {}),
     annotations: {
       readOnlyHint: access === "read",
@@ -387,7 +395,26 @@ export const toolDefinitions: ToolDefinition[] = [
 
   define("add_language", "Add survey language", "Add a language to a survey.", "write", [surveyId(), p("language", string("Language code to add."))]),
   define("delete_language", "Delete survey language", "Remove a non-base language from a survey.", "delete", [surveyId(), p("language", string("Language code to remove."))]),
-  define("get_language_properties", "Get language properties", "Read localized survey properties.", "read", [surveyId(), propertyNames("properties", "survey language"), language()]),
+  define(
+    "get_language_properties",
+    "Get language properties",
+    "Read localized survey properties. The attachments field is returned exactly as LimeSurvey stores it (a JSON " +
+      "string since DB version 647, a PHP serialize string on older instances; keep it unchanged for a round trip " +
+      "to set_language_properties). When it is part of the answer, attachments_parsed is added: { <mail type>: " +
+      "[ { file_name, url, size, relevance } ] } with the mail types invitation, reminder, registration, " +
+      "confirmation, admin_notification and admin_detailed_notification; an empty value gives {} and an " +
+      "unparsable one gives null plus a warning. LimeSurvey drops requested property names that are not a column " +
+      "of the survey language settings without saying so: such names are listed in the warning unknown_fields " +
+      "(if every name is unknown the call fails with the no-data hint). An unknown or missing language silently " +
+      "falls back to the base language. RemoteControl has no method that lists the uploaded survey files " +
+      "themselves; attachments only references them by server path.",
+    "read",
+    [surveyId(), propertyNames("properties", "survey language"), language()],
+    {
+      enrich: (result) => enrichLanguageProperties(result),
+      afterCall: async (result, input) => languagePropertiesWarnings(result, input),
+    },
+  ),
   define("set_language_properties", "Set language properties", `Update localized survey properties.${describeWriteSpec("set_language_properties")}`, "write", [surveyId(), p("data", jsonObject("Localized property names mapped to new values.")), language()], writeChecks("set_language_properties")),
 
   define("add_group", "Create question group", "Add an empty question group to a survey.", "write", [surveyId(), p("title", string("Question-group title.")), p("description", z.string().optional().describe("Question-group description."), "")]),
