@@ -45,7 +45,7 @@ interface Sim {
   importTitle: string;
 }
 
-function initialSim(overrides: Record<string, Override> = {}): Sim {
+function initialSim(overrides: Record<string, Override> = {}, orders: [number, number, number] = [1, 2, 3]): Sim {
   const question = (qid: number, title: string, order: number, extra: Partial<SimQuestion> = {}): SimQuestion => ({
     qid, sid: SID, gid: GID, parent: 0, title, order, type: "T", mandatory: "N", ...extra,
   });
@@ -55,9 +55,9 @@ function initialSim(overrides: Record<string, Override> = {}): Sim {
     importTitle: "Q00",
     overrides,
     questions: [
-      question(100, "Q_BEFORE", 1),
-      question(OLD_QID, "Q00", 2, { mandatory: "Y" }),
-      question(102, "Q_AFTER", 3),
+      question(100, "Q_BEFORE", orders[0]),
+      question(OLD_QID, "Q00", orders[1], { mandatory: "Y" }),
+      question(102, "Q_AFTER", orders[2]),
       question(103, "Q_SUB", 1, { parent: 102 }),
     ],
   };
@@ -65,7 +65,8 @@ function initialSim(overrides: Record<string, Override> = {}): Sim {
 
 const mains = (state: Sim) => state.questions
   .filter((item) => item.parent === 0 && item.gid === GID)
-  .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+  // Code-point order like a database collation ("Q00" < "Q_BEFORE"); localeCompare would put "_" first.
+  .sort((a, b) => a.order - b.order || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
 
 function renumber(state: Sim): void {
   mains(state).forEach((item, index) => { item.order = index + 1; });
@@ -195,6 +196,7 @@ test("[S-03b] replace_question swaps the question in place: RPC order, parameter
       "get_question_properties",
       "list_questions",
       "set_question_properties",
+      "get_question_properties",
       "import_question",
       "set_question_properties",
       "get_question_properties",
@@ -202,7 +204,8 @@ test("[S-03b] replace_question swaps the question in place: RPC order, parameter
       "get_question_properties",
       "list_questions",
     ]);
-    const [survey, oldProps, listBefore, rename, imported, reorder, guard, deleted, newProps, listAfter] = session.requests;
+    const [survey, oldProps, listBefore, rename, reread, imported, reorder, guard, deleted, newProps, listAfter] = session.requests;
+    assert.deepEqual(reread?.params, [OLD_QID, ["question_order"]], "the order is read again after the rename renumbered the group");
     assert.deepEqual(survey?.params, [SID, ["active"]]);
     assert.deepEqual(oldProps?.params, [OLD_QID, ["sid", "gid", "parent_qid", "title", "question_order", "mandatory", "type"]]);
     assert.deepEqual(listBefore?.params, [SID, GID]);
@@ -465,6 +468,23 @@ test("[S-03b] replace_question reports manual_cleanup when the rollback itself f
     await session.close();
   }
 });
+
+for (const [label, orders] of [["gaps 2, 4, 6", [2, 4, 6]], ["0-based 0, 1, 2", [0, 1, 2]]] as const) {
+  test(`[S-03b] replace_question keeps the position when the group has ${label} and the rename renumbers it`, async () => {
+    const sim = initialSim({}, [...orders]);
+    const session = await connected(sim);
+    try {
+      const response = await session.client.callTool({ name: TOOL, arguments: await args() });
+      assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+      const result = structured(response);
+      assert.equal(result.verification.ok, true, JSON.stringify(result.verification));
+      assert.deepEqual(mains(sim).map((item) => item.title), ["Q_BEFORE", "Q00", "Q_AFTER"]);
+      assert.ok(!sim.questions.some((item) => item.qid === OLD_QID));
+    } finally {
+      await session.close();
+    }
+  });
+}
 
 test("[S-03b] replace_question under write scope none is blocked before any RPC", async () => {
   const session = await connected(initialSim(), { ...baseConfig, writeScope: "none", readOnly: true });
