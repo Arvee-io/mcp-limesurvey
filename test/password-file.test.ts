@@ -95,6 +95,33 @@ test("[X-01] a UTF-16 password file is rejected with the cause and the fix, with
   }
 });
 
+test("[X-01] a UTF-16 password file without byte order mark (NUL bytes) is rejected without the password", () => {
+  const file = passwordFile("utf16le-nobom.txt", Buffer.from(PASSWORD, "utf16le"));
+  assert.throws(
+    () => loadConfig({ ...baseEnv, LIMESURVEY_PASSWORD_FILE: file }),
+    (error: unknown) => {
+      const message = (error as Error).message;
+      assert.match(message, /NUL/);
+      assert.match(message, /UTF-16/);
+      assert.ok(!message.includes("test-only"));
+      return true;
+    },
+  );
+});
+
+test("[X-01] the UTF-16 hint never suggests typing the password as a literal", () => {
+  const file = passwordFile("utf16le-hint.txt", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(PASSWORD, "utf16le")]));
+  assert.throws(
+    () => loadConfig({ ...baseEnv, LIMESURVEY_PASSWORD_FILE: file }),
+    (error: unknown) => {
+      const message = (error as Error).message;
+      assert.ok(!message.includes("<password>"), message);
+      assert.match(message, /Read-Host/);
+      return true;
+    },
+  );
+});
+
 test("[X-01] a password file that is not valid UTF-8 is rejected", () => {
   const file = passwordFile("latin1.txt", Buffer.from([0x70, 0x77, 0xe4, 0x28, 0x0a]));
   assert.throws(() => loadConfig({ ...baseEnv, LIMESURVEY_PASSWORD_FILE: file }), /UTF-8/);
