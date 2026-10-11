@@ -304,7 +304,7 @@ class Collector {
   }
 }
 
-const QUESTION_PROPERTIES = ["title", "question", "help", "type", "mandatory", "relevance", "other", "attributes", "attributes_lang", "answeroptions"];
+const QUESTION_PROPERTIES = ["title", "question", "help", "type", "mandatory", "relevance", "other", "attributes", "attributes_lang", "answeroptions", "answeroptions_multiscale"];
 
 export async function verifySurveyAgainstLss(
   client: LimeSurveyClient,
@@ -316,16 +316,18 @@ export async function verifySurveyAgainstLss(
 ): Promise<JsonValue> {
   // Parse (and validate) the file first: a bad file must fail before any RPC.
   let lss = parseLss(lssXml, requestedLanguage);
+  // Without a language, list_groups answers in the survey's base language and names it in each row. That avoids
+  // get_survey_properties, which needs surveysettings/read (the other methods only need surveycontent/read).
+  const groupRows = await client.call("list_groups", [surveyId, requestedLanguage ?? null]);
   if (requestedLanguage === undefined) {
-    const properties = await client.call("get_survey_properties", [surveyId, ["language"]]);
-    const liveLanguage = isObject(properties) ? properties.language : undefined;
+    const firstRow = (Array.isArray(groupRows) ? groupRows : []).find(isObject);
+    const liveLanguage = firstRow?.language;
     if (typeof liveLanguage === "string" && liveLanguage !== "" && liveLanguage !== lss.language) {
       lss = parseLss(lssXml, liveLanguage);
     }
   }
   const useLanguage = lss.language;
 
-  const groupRows = await client.call("list_groups", [surveyId, useLanguage]);
   const questionRows = await client.call("list_questions", [surveyId, null, useLanguage]);
 
   const liveGroups: LiveGroup[] = (Array.isArray(groupRows) ? groupRows : [])
