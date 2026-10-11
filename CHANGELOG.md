@@ -5,7 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.0] - 2026-10-12
+
+This release has 75 tools (two new: `verify_survey_against_lss` and
+`replace_question`). The additions are based on user feedback.
 
 ### Added
 
