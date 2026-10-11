@@ -345,3 +345,39 @@ test("[S-01] every registered tool is gated by its documented write scope", asyn
     }
   }
 });
+
+test("[S-01] import_survey with import_data_type lsa needs outreach, lss stays content", async () => {
+  for (const scope of ["content", "lifecycle"]) {
+    const session = await connected(envConfig({ LIMESURVEY_WRITE_SCOPE: scope }));
+    try {
+      for (const args of [
+        { import_data: "AAAA", import_data_type: "lsa" },
+        { import_data_path: "does-not-exist.lsa", import_data_type: "lsa" },
+      ]) {
+        const response = await session.client.callTool({ name: "limesurvey_import_survey", arguments: args });
+        assert.equal(response.isError, true, `${scope} ${JSON.stringify(args)}`);
+        const result = errorResult(response.structuredContent);
+        assert.equal(result.code, "WRITE_SCOPE_INSUFFICIENT");
+        const details = result.details as Record<string, unknown>;
+        assert.equal(details.required_scope, "outreach");
+        assert.equal(details.current_scope, scope);
+      }
+      assert.deepEqual(session.requests, []);
+      const lss = await session.client.callTool({ name: "limesurvey_import_survey", arguments: importArgs });
+      assert.equal(lss.isError, undefined, JSON.stringify(lss.structuredContent));
+    } finally {
+      await session.close();
+    }
+  }
+  const session = await connected(envConfig({ LIMESURVEY_WRITE_SCOPE: "outreach" }));
+  try {
+    const lsa = await session.client.callTool({
+      name: "limesurvey_import_survey",
+      arguments: { import_data: "AAAA", import_data_type: "lsa" },
+    });
+    assert.equal(lsa.isError, undefined, JSON.stringify(lsa.structuredContent));
+    assert.ok(session.requests.some((request) => request.method === "import_survey"));
+  } finally {
+    await session.close();
+  }
+});
