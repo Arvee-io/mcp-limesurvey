@@ -12,7 +12,9 @@ export function scopeAllows(current: WriteScope, required: WriteScope): boolean 
 /**
  * Minimum write scope per full MCP tool name. This table is the single source of truth: the server
  * and the workflow/theme tools all enforce through assertWriteScope(), and a tool missing here is
- * treated as "outreach" (fail closed).
+ * treated as "outreach" (fail closed). One argument-dependent exception lives in requiredWriteScope():
+ * limesurvey_import_survey with import_data_type "lsa" needs "outreach" (a .lsa activates the survey and
+ * imports participants and responses).
  *
  * - none: reads, session handling, and local-only tools (theme generation/validation, *_to_file exports).
  * - content: creates or changes survey content (structure, texts, quotas, theme assignment).
@@ -118,7 +120,11 @@ export function effectiveWriteScope(config: LimeSurveyConfig): { scope: WriteSco
 }
 
 /** Minimum scope a tool call needs. Unknown tool names fail closed. */
-export function requiredWriteScope(toolName: string, _input?: Record<string, unknown>): WriteScope {
+export function requiredWriteScope(toolName: string, input?: Record<string, unknown>): WriteScope {
+  // A .lsa archive activates the survey and imports participants and responses.
+  if (toolName === "limesurvey_import_survey" && String(input?.import_data_type).trim().toLowerCase() === "lsa") {
+    return "outreach";
+  }
   return TOOL_WRITE_SCOPES[toolName] ?? "outreach";
 }
 
