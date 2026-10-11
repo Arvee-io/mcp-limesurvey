@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { jsonValueSchema } from "./tool-definitions.js";
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
+import { assertWriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
 const themeNameSchema = z
@@ -34,22 +35,18 @@ function response(workflow: string, result: JsonValue, isError = false): Workflo
 async function run(
   config: LimeSurveyConfig,
   workflow: string,
-  writes: boolean,
   operation: () => Promise<JsonValue>,
 ): Promise<WorkflowResult> {
-  if (writes && config.readOnly) {
-    return response(workflow, {
-      status: "error",
-      message: "This tool is disabled because LIMESURVEY_READ_ONLY=true.",
-    }, true);
-  }
   try {
+    // The scope check runs before the operation, so nothing is read or sent when a tool is blocked.
+    assertWriteScope(config, `limesurvey_${workflow}`);
     return response(workflow, await operation());
   } catch (value) {
     return response(workflow, {
       status: "error",
       message: value instanceof Error ? value.message : String(value),
       ...(value instanceof LimeSurveyError && value.code ? { code: value.code } : {}),
+      ...(value instanceof LimeSurveyError && value.details !== undefined ? { details: value.details } : {}),
     }, true);
   }
 }
@@ -560,7 +557,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async (input) => run(config, "generate_survey_theme", false, async () => {
+    async (input) => run(config, "generate_survey_theme", async () => {
       if (contrast(input.text_color, input.background_color) < 4.5) {
         throw new LimeSurveyError("text_color and background_color must have a WCAG contrast ratio of at least 4.5:1.");
       }
@@ -661,7 +658,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ file_name }) => run(config, "validate_survey_theme", false, () => validateZip(config, file_name)),
+    async ({ file_name }) => run(config, "validate_survey_theme", () => validateZip(config, file_name)),
   );
 
   server.registerTool(
@@ -679,7 +676,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async (input) => run(config, "get_theme_publication_guide", false, async () => {
+    async (input) => run(config, "get_theme_publication_guide", async () => {
       const major = Number(input.installed_limesurvey_version.split(".")[0]);
       const packageMajor = /-ls([67])\.zip$/i.exec(input.package_file_name)?.[1];
       const compatibility = (major === 7 || major === 6) && (!packageMajor || packageMajor === String(major))
@@ -745,7 +742,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ survey_id, theme_name }) => run(config, "assign_survey_theme", true, async () => {
+    async ({ survey_id, theme_name }) => run(config, "assign_survey_theme", async () => {
       const rpcResult = await client.call("set_survey_properties", [survey_id, { template: theme_name }]);
       return {
         survey_id,
@@ -774,7 +771,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ survey_scan_limit }) => run(config, "list_installed_themes", false, async () => {
+    async ({ survey_scan_limit }) => run(config, "list_installed_themes", async () => {
       const local = await listGeneratedThemePackages(config.themeDir);
       const remote = await scanThemesInUse(client, survey_scan_limit);
       return {

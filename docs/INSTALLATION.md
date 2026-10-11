@@ -13,8 +13,13 @@ Streamable HTTP only when a central service is required.
 - The exact RemoteControl endpoint, normally:
   `https://survey.example.com/index.php/admin/remotecontrol`
 
-Start with `LIMESURVEY_READ_ONLY=true`. Enable writes only after the connection
-and visible surveys have been verified.
+Start with `LIMESURVEY_WRITE_SCOPE=none` (equivalent to `LIMESURVEY_READ_ONLY=true`)
+to verify the connection and the visible surveys. For building and correcting
+surveys, switch to `LIMESURVEY_WRITE_SCOPE=content`: it allows imports,
+creating and editing survey content, and theme assignment, but not activation,
+deletion, participants, responses, or email. Raise the scope further only when
+those actions are intended (`lifecycle`, then `outreach`); the full tool
+list per scope is in the README section *Write Safety*.
 
 ## Codex CLI
 
@@ -27,7 +32,7 @@ codex mcp add limesurvey `
   --env "LIMESURVEY_USERNAME=rpc-user" `
   --env "LIMESURVEY_PASSWORD=replace-me" `
   --env "LIMESURVEY_AUTH_PLUGIN=Authdb" `
-  --env "LIMESURVEY_READ_ONLY=true" `
+  --env "LIMESURVEY_WRITE_SCOPE=none" `
   --env "LIMESURVEY_EXPORT_DIR=C:/limesurvey-mcp/exports" `
   --env "LIMESURVEY_THEME_DIR=C:/limesurvey-mcp/themes" `
   -- npx -y limesurvey-mcp-server@latest
@@ -59,7 +64,7 @@ Clients that support the common `mcpServers` format can use:
         "LIMESURVEY_USERNAME": "rpc-user",
         "LIMESURVEY_PASSWORD": "replace-me",
         "LIMESURVEY_AUTH_PLUGIN": "Authdb",
-        "LIMESURVEY_READ_ONLY": "true",
+        "LIMESURVEY_WRITE_SCOPE": "none",
         "LIMESURVEY_EXPORT_DIR": "C:/limesurvey-mcp/exports",
         "LIMESURVEY_THEME_DIR": "C:/limesurvey-mcp/themes"
       }
@@ -128,7 +133,8 @@ After restarting the MCP client:
 1. Call `limesurvey_get_session_key`; expect `status: connected`.
 2. Call `limesurvey_list_surveys`; confirm only expected surveys are visible.
 3. Call `limesurvey_list_survey_groups`.
-4. Keep `LIMESURVEY_READ_ONLY=true` until these checks pass.
+4. Keep `LIMESURVEY_WRITE_SCOPE=none` until these checks pass, then raise it to
+   `content` for building surveys.
 
 For source installations, run the mocked test suite and inspect package
 contents:
@@ -241,8 +247,13 @@ instance — those surface as a failing tool call instead.
   `LIMESURVEY_AUTH_PLUGIN`.
 - HTML or `404` response: verify the exact `/index.php/admin/remotecontrol`
   endpoint and that JSON-RPC is enabled.
-- Write tool blocked: set `LIMESURVEY_READ_ONLY=false` only when writes are
-  intended, then restart the MCP client.
+- Write tool blocked (error code `WRITE_SCOPE_INSUFFICIENT`): the message names
+  the current scope, the required scope, and the variable that set it. If the
+  change is intended, raise `LIMESURVEY_WRITE_SCOPE` (`content` < `lifecycle`
+  < `outreach`) and fully restart the MCP client. `LIMESURVEY_READ_ONLY=true`
+  equals `none`; if both variables are set, the stricter level wins and a
+  startup warning is printed. Do not work around the block with direct
+  RemoteControl calls.
 - Export or theme workflow unavailable: configure writable absolute
   `LIMESURVEY_EXPORT_DIR` and `LIMESURVEY_THEME_DIR` paths.
 - MCP configuration changed but behavior is unchanged: fully restart the MCP

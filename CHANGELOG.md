@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `LIMESURVEY_WRITE_SCOPE` (`none`, `content`, `lifecycle`, `outreach`;
+  cumulative), based on user feedback: the previous all-or-nothing
+  `LIMESURVEY_READ_ONLY` switch pushed people to call RemoteControl directly,
+  outside the server's confirmations. `content` allows building and correcting
+  surveys (imports, structure, texts, quotas, theme assignment); `lifecycle`
+  adds activation and deletion; `outreach` adds participants, responses,
+  uploads, and email. Every one of the 71 tools has a documented minimum scope
+  (new `src/write-scope.ts`, single source of truth); a tool without an entry is
+  treated as `outreach`. Blocked calls fail before any file read or RPC request
+  with `WRITE_SCOPE_INSUFFICIENT`, naming the current and required scope and
+  the variable that set it.
+- A startup warning when `LIMESURVEY_READ_ONLY` and `LIMESURVEY_WRITE_SCOPE`
+  are both set; the stricter level applies.
+
+### Changed
+
+- `LIMESURVEY_READ_ONLY=true` is now an alias for `LIMESURVEY_WRITE_SCOPE=none`.
+  Without either variable behavior is unchanged (everything allowed).
+- Based on user feedback, tools that only work locally no longer count as
+  writes and are available in read-only mode and under every scope:
+  `generate_survey_theme`, `validate_survey_theme`,
+  `get_theme_publication_guide`, `export_responses_to_file`,
+  `export_responses_by_token_to_file`, `export_statistics_to_file`, and
+  `export_survey_to_file`. Their directory checks are unchanged.
+- `get_session_key` and `release_session_key` are allowed under every scope
+  (they were previously blocked in read-only mode).
+
 ## [1.3.1] - 2026-07-25
 
 ### Fixed

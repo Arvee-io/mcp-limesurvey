@@ -8,6 +8,7 @@ import type { LimeSurveyClient } from "./client.js";
 import { SERVER_VERSION } from "./server.js";
 import { buildRpcParams, jsonValueSchema, toolDefinitions } from "./tool-definitions.js";
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
+import { assertWriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
 const surveyId = z.number().int().positive().describe("Numeric LimeSurvey survey ID.");
@@ -40,18 +41,11 @@ function error(workflow: string, value: unknown): WorkflowResult {
 async function run(
   config: LimeSurveyConfig,
   workflow: string,
-  writes: boolean,
   operation: () => Promise<JsonValue>,
 ): Promise<WorkflowResult> {
-  if (writes && config.readOnly) {
-    return error(
-      workflow,
-      new LimeSurveyError(
-        `The tool is disabled because LIMESURVEY_READ_ONLY=true. Use a read-only tool or explicitly disable read-only mode for this server.`,
-      ),
-    );
-  }
   try {
+    // The scope check runs before the operation, so nothing is read or sent when a tool is blocked.
+    assertWriteScope(config, `limesurvey_${workflow}`);
     return text(workflow, await operation());
   } catch (value) {
     return error(workflow, value);
@@ -216,7 +210,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ query, offset, limit }) => run(config, "find_surveys", false, async () => {
+    async ({ query, offset, limit }) => run(config, "find_surveys", async () => {
       const value = await client.call("list_surveys", [null, null]);
       const surveys = Array.isArray(value) ? value : [];
       const needle = query.toLowerCase();
@@ -240,7 +234,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ survey_id }) => run(config, "get_survey_languages", false, async () => {
+    async ({ survey_id }) => run(config, "get_survey_languages", async () => {
       const value = await client.call("get_survey_properties", [survey_id, ["language", "additional_languages"]]);
       const properties = objectValue(value) ?? {};
       const languages = new Set<string>();
@@ -268,11 +262,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ survey_id, participant, create_token }) => run(
-      config,
-      "add_participant",
-      true,
-      () => client.call("add_participants", [survey_id, [participant], create_token]),
+    async ({ survey_id, participant, create_token }) => run(config, "add_participant", () => client.call("add_participants", [survey_id, [participant], create_token]),
     ),
   );
 
@@ -292,11 +282,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ survey_id, conditions, attributes, unused, offset, limit }) => run(
-      config,
-      "list_filtered_participants",
-      false,
-      () => client.call("list_participants", [survey_id, offset, limit, unused, attributes, conditions]),
+    async ({ survey_id, conditions, attributes, unused, offset, limit }) => run(config, "list_filtered_participants", () => client.call("list_participants", [survey_id, offset, limit, unused, attributes, conditions]),
     ),
   );
 
@@ -309,7 +295,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async () => run(config, "list_response_export_formats", false, async () => {
+    async () => run(config, "list_response_export_formats", async () => {
       if (!config.enableExperimentalMethods) {
         throw new LimeSurveyError(
           "The non-standard list_response_exports method is disabled. Install the matching LimeSurvey extension and set LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS=true.",
@@ -340,7 +326,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_responses_to_file", false, async () => {
+    async (input) => run(config, "export_responses_to_file", async () => {
       const definition = findDefinition("export_responses");
       const data = await client.call("export_responses", buildRpcParams(definition, input));
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
@@ -366,7 +352,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_responses_by_token_to_file", false, async () => {
+    async (input) => run(config, "export_responses_by_token_to_file", async () => {
       const definition = findDefinition("export_responses_by_token");
       const data = await client.call("export_responses_by_token", buildRpcParams(definition, input));
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
@@ -389,7 +375,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_statistics_to_file", false, async () => {
+    async (input) => run(config, "export_statistics_to_file", async () => {
       const definition = findDefinition("export_statistics");
       const data = await client.call("export_statistics", buildRpcParams(definition, input));
       return saveExport(config, data, input.document_type, input.file_name, input.overwrite, input.confirm_overwrite);
@@ -414,7 +400,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ probe_instance }) => run(config, "get_instance_info", false, async () => {
+    async ({ probe_instance }) => run(config, "get_instance_info", async () => {
       const [exportDir, importDir, themeDir] = await Promise.all([
         directoryInfo(config.exportDir),
         directoryInfo(config.importDir),
@@ -498,7 +484,7 @@ export function registerWorkflowTools(
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async (input) => run(config, "export_survey_to_file", false, async () => {
+    async (input) => run(config, "export_survey_to_file", async () => {
       if (!config.enableExperimentalMethods) {
         throw new LimeSurveyError(
           "Core LimeSurvey RemoteControl2 has no export_survey method.",

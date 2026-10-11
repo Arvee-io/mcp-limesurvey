@@ -1,4 +1,5 @@
 import { LimeSurveyError, type LimeSurveyConfig } from "./types.js";
+import { WRITE_SCOPES, type WriteScope, type WriteScopeSource } from "./write-scope.js";
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
@@ -22,6 +23,28 @@ function booleanValue(value: string | undefined, fallback: boolean, name: string
   if (value.toLowerCase() === "true") return true;
   if (value.toLowerCase() === "false") return false;
   throw new LimeSurveyError(`${name} must be true or false.`);
+}
+
+function writeScopeValue(value: string | undefined): WriteScope | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  const scope = WRITE_SCOPES.find((candidate) => candidate === trimmed);
+  if (!scope) {
+    throw new LimeSurveyError(`LIMESURVEY_WRITE_SCOPE must be one of ${WRITE_SCOPES.join(", ")}.`);
+  }
+  return scope;
+}
+
+/** Combines the legacy read-only switch and the write scope; the stricter level wins. */
+function resolveScope(
+  readOnly: boolean,
+  requested: WriteScope | undefined,
+): { scope: WriteScope; source: WriteScopeSource } {
+  if (requested === undefined) {
+    return readOnly ? { scope: "none", source: "LIMESURVEY_READ_ONLY" } : { scope: "outreach", source: "default" };
+  }
+  if (readOnly && requested !== "none") return { scope: "none", source: "LIMESURVEY_READ_ONLY" };
+  return { scope: requested, source: "LIMESURVEY_WRITE_SCOPE" };
 }
 
 function commaSeparated(value: string | undefined): string[] | undefined {
@@ -61,6 +84,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LimeSurveyConf
     );
   }
 
+  const rawReadOnly = env.LIMESURVEY_READ_ONLY ?? env.READONLY_MODE;
+  const readOnly = booleanValue(rawReadOnly, false, "LIMESURVEY_READ_ONLY");
+  const readOnlySet = rawReadOnly !== undefined && rawReadOnly.trim() !== "";
+  const requestedScope = writeScopeValue(env.LIMESURVEY_WRITE_SCOPE);
+  const effective = resolveScope(readOnly, requestedScope);
+
   url.hash = "";
   const config: LimeSurveyConfig = {
     url,
@@ -73,7 +102,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LimeSurveyConf
       50_000,
       "LIMESURVEY_MAX_RESPONSE_CHARS",
     ),
-    readOnly: booleanValue(env.LIMESURVEY_READ_ONLY ?? env.READONLY_MODE, false, "LIMESURVEY_READ_ONLY"),
+    readOnly: effective.scope === "none",
+    writeScope: effective.scope,
+    writeScopeSource: effective.source,
     enableExperimentalMethods: booleanValue(
       env.LIMESURVEY_ENABLE_EXPERIMENTAL_METHODS,
       false,
@@ -105,6 +136,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LimeSurveyConf
   if (importDir) config.importDir = importDir;
   const themeDir = env.LIMESURVEY_THEME_DIR?.trim();
   if (themeDir) config.themeDir = themeDir;
+  if (readOnlySet && requestedScope !== undefined) {
+    config.writeScopeWarning = `Both LIMESURVEY_READ_ONLY=${readOnly} and LIMESURVEY_WRITE_SCOPE=${requestedScope} are set; `
+      + `the stricter one applies, so the effective write scope is "${effective.scope}" `
+      + `(${effective.source}). Remove one of the two variables to avoid confusion.`;
+  }
   if (bearerToken) config.httpBearerToken = bearerToken;
   const allowedHosts = commaSeparated(env.MCP_HTTP_ALLOWED_HOSTS);
   if (allowedHosts) config.httpAllowedHosts = allowedHosts;
@@ -122,6 +158,7 @@ const RESTART_HINT = "Environment changes require a full Claude Code restart; re
  */
 export function envPreflightWarnings(config: LimeSurveyConfig): string[] {
   const warnings: string[] = [];
+  if (config.writeScopeWarning) warnings.push(config.writeScopeWarning);
   if (!config.exportDir) {
     warnings.push(
       "LIMESURVEY_EXPORT_DIR is not set: file-export tools (export_responses_to_file, "

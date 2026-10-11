@@ -10,6 +10,7 @@ import {
 import { LimeSurveyError, type JsonValue, type LimeSurveyConfig, type LimeSurveyToolResult } from "./types.js";
 import { registerWorkflowTools } from "./workflow-tools.js";
 import { registerThemeTools } from "./theme-tools.js";
+import { assertWriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({
   method: z.string(),
@@ -86,11 +87,7 @@ export function createServer(
         const rawInput = input as Record<string, unknown>;
         const format = (rawInput.response_format ?? "json") as ResponseFormat;
         try {
-          if (config.readOnly && !definition.annotations.readOnlyHint) {
-            throw new LimeSurveyError(
-              `The tool limesurvey_${definition.method} is disabled because LIMESURVEY_READ_ONLY=true.`,
-            );
-          }
+          assertWriteScope(config, `limesurvey_${definition.method}`, rawInput);
           const preparedInput = definition.prepare ? await definition.prepare(rawInput, config) : rawInput;
           const result = await client.call(definition.method, buildRpcParams(definition, preparedInput));
           const output = prepareResult(definition.method, result, config.maxResponseChars);
