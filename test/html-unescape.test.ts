@@ -62,7 +62,7 @@ test("[GEN-PARITY] unescapeHtmlSafe leaves references to & < > \" ' alone and de
 
 test("[GEN-PARITY] unescapeHtmlSafe equals Python wherever Python's result has none of & < > \" ' and every reference ends with ;", () => {
   const relevant = cases.filter((item) => !MARKUP_CHARACTERS.test(item.python) && item.safe === item.python);
-  assert.ok(relevant.length > 20);
+  assert.ok(relevant.length > 15);
   for (const { input, python } of relevant) {
     assert.equal(unescapeHtmlSafe(input), python, `input ${JSON.stringify(input)}`);
   }

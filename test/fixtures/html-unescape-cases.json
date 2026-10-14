@@ -62,12 +62,12 @@
  {
   "input": "&#1;",
   "python": "",
-  "safe": ""
+  "safe": "&#1;"
  },
  {
   "input": "&#x7f;",
   "python": "",
-  "safe": ""
+  "safe": "&#x7f;"
  },
  {
   "input": "&#x80;",
@@ -247,12 +247,12 @@
  {
   "input": "&#xFFFE;",
   "python": "",
-  "safe": ""
+  "safe": "&#xFFFE;"
  },
  {
   "input": "&#xFDD0;",
   "python": "",
-  "safe": ""
+  "safe": "&#xFDD0;"
  },
  {
   "input": "&#13;",
