@@ -285,6 +285,8 @@ const expectedScopes: Record<string, Scope> = {
   limesurvey_create_survey_from_spec: "content",
   limesurvey_add_question_from_spec: "content",
   limesurvey_add_group_from_spec: "content",
+  limesurvey_update_question_from_spec: "content",
+  limesurvey_update_survey_texts: "content",
 };
 
 // Minimal valid arguments (including confirmation literals) for every tool above "none".
@@ -348,10 +350,23 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
     survey_id: 1,
     group: { title: "G", questions: [{ code: "Q01", type: "S", text: "Frage" }] },
   },
+  // The real run (dry_run false) needs the fingerprint and the confirmation; a dry run would only need "none".
+  limesurvey_update_question_from_spec: {
+    survey_id: 1,
+    question_id: 1,
+    question: { code: "Q01", type: "S", text: "Frage" },
+    dry_run: false,
+    expected_fingerprint: "0".repeat(64),
+    confirm_destructive_action: true,
+  },
+  limesurvey_update_survey_texts: {
+    survey_id: 1,
+    texts: { survey: { title: "T" } },
+  },
 };
 
 test("[S-01] every registered tool is gated by its documented write scope", async () => {
-  assert.equal(Object.keys(expectedScopes).length, 80);
+  assert.equal(Object.keys(expectedScopes).length, 82);
   const writeTools = Object.entries(expectedScopes).filter(([, scope]) => scope !== "none").map(([name]) => name);
   assert.deepEqual(Object.keys(minimalArguments).sort(), [...writeTools].sort());
 
