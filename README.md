@@ -405,7 +405,7 @@ path, which keeps them usable from remote MCP clients.
 | `limesurvey_validate_spec` | `none` | Checks a survey, group, or question description and reports every problem at once with `path` (for example `groups[1].questions[3].answers[0].code`), `message`, and `fix`. With `survey_id` it also reads the target survey (read methods only) and checks codes and languages against it. |
 | `limesurvey_get_survey_spec` | `none` | Reads a survey, one group (`group_id`), or one question (`question_id`) as a description in the format the write tools take, with `ids`, `position`, a `fingerprint`, `unreadable` (what RemoteControl cannot read), and `missing_translations`. |
 | `limesurvey_create_survey_from_spec` | `content` | Validates the description before any request, generates the `.lss` in memory, imports it with `import_survey`, reads the new survey back, and reports `verification { ok, differences, differences_total, truncated }`. |
-| `limesurvey_add_question_from_spec` | `content` | Inserts one question into a group of an inactive survey at `position` (1-based index, `{ "before": "<code>" }` or `{ "after": "<code>" }`; default: at the end), then reads it back and compares it with the description. |
+| `limesurvey_add_question_from_spec` | `content` | Inserts one question into a group of an inactive survey at `position` (1-based index, `{ "before": "<code>" }` or `{ "after": "<code>" }`; default: at the end), then reads it back and compares it with the description. `acknowledge: ["fill_translation_gaps"]` allows LimeSurvey to fill missing translations of other questions. |
 | `limesurvey_add_group_from_spec` | `content` | Inserts one group with its questions into an inactive survey at `position` (1-based index, `{ "before": <group_id> }` or `{ "after": <group_id> }`; default: at the end), then reads it back and compares it. |
 
 ### Spec format
@@ -522,12 +522,21 @@ are free in the survey without regard to case (`CODE_CONFLICT` otherwise, becaus
 LimeSurvey would rename them silently), an inactive survey (`SURVEY_ACTIVE`),
 the group of the survey (`GROUP_SURVEY_MISMATCH`), and a valid position
 (`POSITION_INVALID`); none of these errors writes anything. LimeSurvey imports a
-question or group at the end; the tools then move only the new element to its
-place, so the other questions and groups keep their order values. If a step after
-the import fails, the new element is deleted again and the error reports
-`failed_step`, `rolled_back`, and `manual_cleanup`. When LimeSurvey fills a
-missing translation of another question from the base language during the
-import, the result lists it under `side_effects`.
+question or group at the end; the tools then write order values only for the new
+element. LimeSurvey renumbers the order values of the group's questions (or of
+the survey's groups) after that, but their sequence stays the same. If a step
+after the import fails, the new element is deleted again by the id from the import
+answer, and the error reports `failed_step`, `rolled_back`, `manual_cleanup`, and
+`cause_code`. When the outcome of the import itself is unclear (a transport error,
+an error after LimeSurvey created the question, an unknown answer), nothing is
+deleted: the error reports `created: "unknown"`, the read-only `candidates`, and a
+`cleanup_hint`.
+
+Importing a question makes LimeSurvey fill missing translations of other
+questions in the survey with the base-language text. If the survey has such gaps,
+`limesurvey_add_question_from_spec` refuses with `TRANSLATION_GAPS` (listing them)
+unless `acknowledge: ["fill_translation_gaps"]` is given; the filled texts are
+then listed under `side_effects`. Importing a group fills nothing.
 
 ### Verification
 

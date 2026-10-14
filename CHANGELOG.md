@@ -31,7 +31,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   scope `content`) insert one question or one group with its questions into an
   inactive survey at a given position, without a file. Only the new element is
   moved; the result is read back and compared; a failure after the import deletes
-  the new element again.
+  the new element again by its id, while an unclear import outcome is reported
+  with read-only candidates instead of being cleaned up. Translation gaps that a
+  question import would fill need `acknowledge: ["fill_translation_gaps"]`.
 - Texts per language: every text field of a spec takes a string or a map per
   language; new structure must cover exactly the survey languages.
   Language-dependent attributes are written once per language.
