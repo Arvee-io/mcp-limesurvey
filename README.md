@@ -449,7 +449,7 @@ path, which keeps them usable from remote MCP clients.
 
 - Question types: all 29 core types, `X L ! O M Y N S T Q 5 F A R K B C E H P D G U I * | 1 : ;`.
   `M Q A K B C E P` need subquestions and no answers; `L ! O R` need answers and no
-  subquestions; `F H` need both; all others need neither. `other` is allowed for
+  subquestions; `F H` need both; `1 : ;` see the next point; all others need neither. `other` is allowed for
   `L ! M P` only.
 - Arrays with two scales: `scale_id` (0 or 1) marks the second scale. Type `1`
   (array dual scale) takes subquestions on scale 0 and answers on scale 0 and 1;
