@@ -53,11 +53,14 @@ async function readTheme(file) {
 async function load(root) {
   const core = {};
   const baseThemeByType = {};
+  // The question type each theme is for (metadata questionType of its config.xml).
+  const typeOfTheme = {};
   for (const file of await findConfigs(path.join(root, "application", "views", "survey", "questions", "answer"))) {
     const theme = await readTheme(file);
     if (!theme.type) continue;
     core[theme.name] = theme.attributes;
     baseThemeByType[theme.type] = theme.name;
+    typeOfTheme[theme.name] = theme.type;
   }
   const effective = { ...core };
   const i18n = new Set();
@@ -72,8 +75,9 @@ async function load(root) {
       else merged[name] = def;
     }
     effective[theme.name] = merged;
+    typeOfTheme[theme.name] = theme.type;
   }
-  return { effective, baseThemeByType, i18n };
+  return { effective, baseThemeByType, i18n, typeOfTheme };
 }
 
 const v6 = await load(root6);
@@ -110,6 +114,12 @@ for (const theme of themes) {
   nameCount += names[theme].length;
 }
 const distinctNames = new Set(Object.values(names).flat()).size;
+
+// The question types each theme is for, in either version (the union): question_theme_name has to fit the type.
+const themeTypes = {};
+for (const theme of themes) {
+  themeTypes[theme] = [...new Set([v6.typeOfTheme[theme], v7.typeOfTheme[theme]].filter((type) => typeof type === "string" && type !== ""))].sort();
+}
 
 const types = [...new Set([...Object.keys(v6.baseThemeByType), ...Object.keys(v7.baseThemeByType)])].sort();
 const baseThemes = {};
@@ -149,6 +159,13 @@ lines.push(
 );
 for (const theme of themes) lines.push(`  ${q(theme)}: ${q(names[theme])},`);
 lines.push("};", "");
+lines.push(
+  "/** The question types each question theme is for in LimeSurvey 6 or 7 (metadata questionType of its config.xml). */",
+  "export const THEME_TYPES: Readonly<Record<string, readonly string[]>> = {",
+);
+for (const theme of themes) lines.push(`  ${q(theme)}: ${q(themeTypes[theme])},`);
+lines.push("};", "");
 await writeFile(output, lines.join("\n"), "utf8");
 console.log(`themes=${themes.length} types=${types.length} i18n=${i18n.length} version-dependent defaults left out=${dropped} `
-  + `attribute names=${nameCount} distinct names=${distinctNames}`);
+  + `attribute names=${nameCount} distinct names=${distinctNames} `
+  + `themes with types=${Object.values(themeTypes).filter((list) => list.length > 0).length}`);

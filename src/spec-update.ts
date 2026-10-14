@@ -18,10 +18,11 @@ import { randomUUID } from "node:crypto";
 import { BASE_THEME_BY_TYPE } from "./attribute-defaults.js";
 import { limeSurveyGeneration } from "./limesurvey-generation.js";
 import { probeOldQuestion } from "./replace-question.js";
-import { capLists, structuredSize } from "./response-limit.js";
+import { capLists, MAX_LIST_ENTRIES, structuredSize } from "./response-limit.js";
 import type { CreatedIds, RpcClient } from "./scoped-client.js";
 import { cappedError, cutList, isRefusal, placeQuestion, questionSequence, relativeTo, setQuestion, type Limit } from "./spec-add.js";
 import {
+  canonicalJson,
   diffSpecs,
   fingerprint,
   normalizeSpec,
@@ -56,6 +57,70 @@ function textOf(value: JsonValue | undefined): string | null {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
   return null;
+}
+
+/** Strings longer than `max` cut to `max` characters (and marked with an ellipsis), anywhere in a JSON value. */
+function shorten(value: JsonValue, max: number): JsonValue {
+  if (typeof value === "string") return value.length > max ? `${value.slice(0, max)}…` : value;
+  if (Array.isArray(value)) return value.map((item) => shorten(item, max));
+  const row = objectOf(value);
+  return row ? Object.fromEntries(Object.entries(row).map(([key, item]) => [key, shorten(item, max)])) : value;
+}
+
+/**
+ * manual_cleanup within LIMESURVEY_MAX_RESPONSE_CHARS: first the long values are shortened (the entry says
+ * values_truncated), then entries are cut (the caller reports the full number).
+ */
+function fitCleanup(entries: JsonObject[], fits: (shown: JsonObject[]) => boolean): JsonObject[] {
+  if (fits(entries)) return entries;
+  const shortened = (max: number): JsonObject[] => entries.map((entry) => {
+    const short = shorten(entry, max) as JsonObject;
+    return JSON.stringify(short) === JSON.stringify(entry) ? entry : { ...short, values_truncated: true };
+  });
+  for (let max = 2000; max >= 20; max = Math.floor(max / 2)) {
+    const shown = shortened(max);
+    if (fits(shown)) return shown;
+  }
+  return capLists({ entries: shortened(20) }, (cut) => fits(cut.entries)).entries;
+}
+
+/** Risks with at most `max` locations each; a risk with locations names their full number (locations_total). */
+function cutRisks(risks: ReadonlyArray<{ locations?: string[] }>, max: number): JsonObject[] {
+  return risks.map((risk) => {
+    const { locations, ...rest } = risk;
+    const head = rest as unknown as JsonObject;
+    return locations === undefined ? head : { ...head, locations: locations.slice(0, max), locations_total: locations.length };
+  });
+}
+
+/** The risks that fit: their locations halved until fits(shown) holds, then, as a last resort, fewer risks. */
+function fitRisks(risks: ReadonlyArray<{ locations?: string[] }>, fits: (shown: JsonObject[]) => boolean): JsonObject[] {
+  for (let max = MAX_LIST_ENTRIES; max >= 0; max = max === 0 ? -1 : Math.floor(max / 2)) {
+    const shown = cutRisks(risks, max);
+    if (fits(shown)) return shown;
+  }
+  return capLists({ risks: cutRisks(risks, 0) }, (cut) => fits(cut.risks)).risks;
+}
+
+/** Whether risks were shown with fewer locations than they have. */
+const locationsCut = (shown: readonly JsonObject[]): boolean => shown.some((risk) => (
+  Array.isArray(risk.locations) && typeof risk.locations_total === "number" && risk.locations.length < risk.locations_total
+));
+
+/** Only the read-back after a successful write failed: the change is there, it was not compared. */
+function verifyReadFailed(what: string, value: unknown, details: JsonObject): LimeSurveyError {
+  const cause = describeError(value);
+  return new LimeSurveyError(
+    `${what} was written, but reading it back failed: ${cause.message} The change was not compared with what was asked for.`,
+    "VERIFY_READ_FAILED",
+    {
+      written: true,
+      ...details,
+      ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
+      recovery: "Do not repeat the call blindly: the change is written. Read it with limesurvey_get_survey_spec and compare it with "
+        + "what was asked for; call the tool again only for what is still missing.",
+    },
+  );
 }
 
 /** The scoped client of the call, the client object the LimeSurvey generation is kept for, and what the call may delete. */
@@ -201,38 +266,150 @@ const SURVEY_REFERENCE_FIELDS: readonly string[] = [
   "email_admin_notification_subj", "email_admin_notification", "email_admin_responses_subj", "email_admin_responses",
 ];
 
+/**
+ * How a source is searched: an expression (relevance, script, attribute) as a whole, a free text (question, help, answer,
+ * group and survey texts, default values) only inside its EM expressions {...}.
+ */
+type SourceKind = "expression" | "text";
+
 interface Source {
   location: string;
   text: string;
+  kind: SourceKind;
 }
 
 const rowsOf = (value: JsonValue): JsonObject[] => (Array.isArray(value) ? value.map(objectOf).filter((row): row is JsonObject => row !== undefined) : []);
 
 /**
- * Every place of the survey outside the question (and its subquestions) where an expression or a text can name it:
- * relevances of questions, subquestions and groups, question, help, group and survey texts of every language, and the
- * attributes of the other questions in the base language. Read methods only.
+ * The EM expressions of a free text: a { that is not followed by white space, up to its matching }; braces inside string
+ * literals ('...' or "...", with backslash escapes) do not count. An unbalanced { starts no expression.
  */
-async function readReferenceSources(rpc: RpcClient, surveyId: number, languages: readonly string[], excluded: number): Promise<Source[]> {
+export function emExpressions(text: string): string[] {
+  const found: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const start = text.indexOf("{", index);
+    if (start < 0) break;
+    const next = text.charAt(start + 1);
+    if (next === "" || /\s/.test(next)) {
+      index = start + 1;
+      continue;
+    }
+    let depth = 0;
+    let quote: string | undefined;
+    let end = -1;
+    for (let position = start; position < text.length; position += 1) {
+      const character = text.charAt(position);
+      if (quote !== undefined) {
+        if (character === "\\") position += 1;
+        else if (character === quote) quote = undefined;
+        continue;
+      }
+      if (character === "'" || character === "\"") quote = character;
+      else if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = position;
+          break;
+        }
+      }
+    }
+    if (end < 0) {
+      index = start + 1;
+      continue;
+    }
+    found.push(text.slice(start + 1, end));
+    index = end + 1;
+  }
+  return found;
+}
+
+/** The parts of a source that are searched: the whole expression, or the EM expressions of a free text. */
+const searchable = (source: Source): string[] => (source.kind === "expression" ? [source.text] : emExpressions(source.text));
+
+/** The answer texts in an answeroptions value of get_question_properties (flat, or per scale for dual scale). */
+function answerTexts(value: JsonValue | undefined): Array<{ code: string; text: string }> {
+  const found: Array<{ code: string; text: string }> = [];
+  const visit = (node: JsonValue | undefined, key: string): void => {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => visit(item, String(index)));
+      return;
+    }
+    const row = objectOf(node);
+    if (!row) return;
+    if (typeof row.answer === "string") {
+      found.push({ code: textOf(row.code) ?? key, text: row.answer });
+      return;
+    }
+    for (const [name, item] of Object.entries(row)) visit(item, name);
+  };
+  visit(value, "");
+  return found;
+}
+
+/** The texts and expressions of the end state of the question itself (it may name its own code or its own parts). */
+function ownSources(question: ComparableQuestion): Source[] {
+  const sources: Source[] = [];
+  const code = question.code;
+  const add = (location: string, value: string | undefined, kind: SourceKind): void => {
+    if (value !== undefined && value !== "") sources.push({ location, text: value, kind });
+  };
+  const addMap = (location: string, value: string | TextMap | undefined, kind: SourceKind): void => {
+    if (typeof value === "string") add(location, value, kind);
+    else for (const [language, text] of Object.entries(value ?? {})) add(`${location}.${language}`, text, kind);
+  };
+  add(`${code}.relevance`, question.relevance, "expression");
+  addMap(`${code}.text`, question.text, "text");
+  addMap(`${code}.help`, question.help, "text");
+  addMap(`${code}.script`, question.script, "expression");
+  addMap(`${code}.default`, question.default, "text");
+  addMap(`${code}.default_other`, question.default_other, "text");
+  for (const [name, value] of Object.entries(question.attributes)) addMap(`${code}.attributes.${name}`, value, "expression");
+  for (const sub of question.subquestions) {
+    add(`${code}_${sub.code}.relevance`, sub.relevance, "expression");
+    addMap(`${code}_${sub.code}.text`, sub.text, "text");
+    addMap(`${code}_${sub.code}.default`, sub.default, "text");
+  }
+  for (const answer of question.answers) {
+    add(`${code}.answers.${answer.code}.relevance`, answer.relevance, "expression");
+    addMap(`${code}.answers.${answer.code}.text`, answer.text, "text");
+  }
+  return sources;
+}
+
+/**
+ * Every place of the survey where an expression or a text can name the question: survey texts, group relevances and
+ * texts, relevances, texts and help of all questions and subquestions, answer texts, scripts and default values of every
+ * language, and the attributes of the other questions; the question itself as its end state `own` (which is what will
+ * exist). Read methods only. A question without a text row in a language is skipped there; any other read error stops
+ * the call before anything is written.
+ */
+async function readReferenceSources(
+  rpc: RpcClient,
+  surveyId: number,
+  languages: readonly string[],
+  own: { questionId: number; question: ComparableQuestion },
+): Promise<Source[]> {
   const base = languages[0] ?? "";
   const sources: Source[] = [];
-  const add = (location: string, value: JsonValue | undefined): void => {
+  const add = (location: string, value: JsonValue | undefined, kind: SourceKind): void => {
     const text = textOf(value);
-    if (text !== null && text !== "") sources.push({ location, text });
+    if (text !== null && text !== "") sources.push({ location, text, kind });
   };
   const surveyRows = await mapLimit(languages, PARALLEL_READS, async (language) => (
     objectOf(await rpc.call("get_language_properties", [surveyId, [...SURVEY_REFERENCE_FIELDS], language]))
   ));
   languages.forEach((language, index) => {
-    for (const field of SURVEY_REFERENCE_FIELDS) add(`survey.${field}.${language}`, surveyRows[index]?.[field]);
+    for (const field of SURVEY_REFERENCE_FIELDS) add(`survey.${field}.${language}`, surveyRows[index]?.[field], "text");
   });
   const groupLists = await mapLimit(languages, PARALLEL_READS, async (language) => rowsOf(await rpc.call("list_groups", [surveyId, language])));
   languages.forEach((language, index) => {
     for (const row of groupLists[index] ?? []) {
       const name = `group ${String(row.gid)}`;
-      if (language === base) add(`${name}.relevance`, row.grelevance);
-      add(`${name}.title.${language}`, row.group_name);
-      add(`${name}.description.${language}`, row.description);
+      if (language === base) add(`${name}.relevance`, row.grelevance, "expression");
+      add(`${name}.title.${language}`, row.group_name, "text");
+      add(`${name}.description.${language}`, row.description, "text");
     }
   });
   const questionLists = await mapLimit(languages, PARALLEL_READS, async (language) => (
@@ -243,29 +420,61 @@ async function readReferenceSources(rpc: RpcClient, surveyId: number, languages:
     const parent = integer(row.parent_qid) ?? 0;
     return parent === 0 ? asString(row.title) : `${codes.get(parent) ?? String(parent)}_${asString(row.title)}`;
   };
-  const others = (row: JsonObject): boolean => integer(row.qid) !== excluded && integer(row.parent_qid) !== excluded;
+  const others = (row: JsonObject): boolean => integer(row.qid) !== own.questionId && integer(row.parent_qid) !== own.questionId;
   languages.forEach((language, index) => {
     for (const row of (questionLists[index] ?? []).filter(others)) {
       const name = nameOf(row);
-      if (language === base) add(`${name}.relevance`, row.relevance);
-      add(`${name}.text.${language}`, row.question);
-      add(`${name}.help.${language}`, row.help);
+      if (language === base) add(`${name}.relevance`, row.relevance, "expression");
+      add(`${name}.text.${language}`, row.question, "text");
+      add(`${name}.help.${language}`, row.help, "text");
     }
   });
+
+  // Scripts, answer texts and attributes of the other main questions, per language (attributes of the base language).
   const mains = (questionLists[0] ?? []).filter((row) => others(row) && (integer(row.parent_qid) ?? 0) === 0);
-  const attributeRows = await mapLimit(mains, PARALLEL_READS, async (row) => {
+  const tasks = mains.flatMap((row) => languages.map((language) => ({ row, language })));
+  const properties = await mapLimit(tasks, PARALLEL_READS, async ({ row, language }) => {
+    const fields = ["script", "attributes_lang", "answeroptions", "answeroptions_multiscale", ...(language === base ? ["attributes"] : [])];
     try {
-      return objectOf(await rpc.call("get_question_properties", [integer(row.qid) ?? 0, ["attributes", "attributes_lang"], base]));
-    } catch {
-      // A question without a text row in the base language cannot be read; it has no attributes to search then.
-      return undefined;
+      return objectOf(await rpc.call("get_question_properties", [integer(row.qid) ?? 0, fields, language]));
+    } catch (error) {
+      // A question without a text row in this language cannot be read there; that is a translation gap, nothing to search.
+      if (isMissingRow(error)) return undefined;
+      throw error;
     }
   });
-  mains.forEach((row, index) => {
-    for (const field of ["attributes", "attributes_lang"]) {
-      for (const [name, value] of Object.entries(objectOf(attributeRows[index]?.[field]) ?? {})) add(`${asString(row.title)}.attributes.${name}`, value);
+  tasks.forEach(({ row, language }, index) => {
+    const props = properties[index];
+    const name = asString(row.title);
+    add(`${name}.script.${language}`, props?.script, "expression");
+    for (const answer of answerTexts(props?.answeroptions)) add(`${name}.answers.${answer.code}.${language}`, answer.text, "text");
+    for (const [attribute, value] of Object.entries(objectOf(props?.attributes) ?? {})) add(`${name}.attributes.${attribute}`, value, "expression");
+    for (const [attribute, value] of Object.entries(objectOf(props?.attributes_lang) ?? {})) add(`${name}.attributes.${attribute}.${language}`, value, "expression");
+  });
+
+  // Default values of the other questions, per language, from the field map (get_question_properties cannot give them).
+  const fieldmaps = await mapLimit(languages, PARALLEL_READS, async (language) => {
+    try {
+      return await rpc.call("get_fieldmap", [surveyId, language]);
+    } catch (error) {
+      // A survey without fields answers "Can not obtain field map": it has no default values either.
+      if (error instanceof LimeSurveyError && /field ?map/i.test(error.message)) return null;
+      throw error;
     }
   });
+  languages.forEach((language, index) => {
+    const fieldmap = fieldmaps[index] ?? null;
+    const entries = Array.isArray(fieldmap) ? fieldmap : Object.values(objectOf(fieldmap) ?? {});
+    for (const entry of entries.map(objectOf)) {
+      const qid = integer(entry?.qid);
+      if (!entry || qid === undefined || qid === own.questionId) continue;
+      const aid = asString(entry.aid);
+      const name = `${codes.get(qid) ?? String(qid)}${aid !== "" ? `_${aid}` : ""}`;
+      add(`${name}.default.${language}`, entry.defaultvalue, "text");
+    }
+  });
+
+  sources.push(...ownSources(own.question));
   return sources;
 }
 
@@ -284,20 +493,30 @@ interface RiskInput {
   languages: readonly string[];
   /** The texts of the question that have no row in a language (paths relative to the question). */
   ownGaps: Array<{ path: string; language: string }>;
+  /** Texts of the question that exist but cannot be read in a language (paths relative to the question). */
+  unreadable: Array<{ path: string; language: string }>;
+  /** The LimeSurvey generation, probed only when it matters (a mention of Q{qid}). */
+  generation: () => Promise<6 | 7>;
 }
 
 const itemKey = (item: { code: string; scale_id?: number }): string => `${item.scale_id ?? 0}:${item.code}`;
 
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /** What exists now and is missing from the end state: subquestions, answers, attributes and default values. */
-function removals(current: ComparableQuestion, desired: ComparableQuestion): { paths: string[]; subquestions: string[]; answers: string[] } {
+function removals(current: ComparableQuestion, desired: ComparableQuestion): {
+  paths: string[];
+  subquestions: Array<{ code: string; scale: number }>;
+  answers: string[];
+} {
   const paths: string[] = [];
   const desiredSubs = new Map(desired.subquestions.map((item) => [itemKey(item), item] as const));
-  const removedSubs: string[] = [];
+  const removedSubs: Array<{ code: string; scale: number }> = [];
   current.subquestions.forEach((item, index) => {
     const kept = desiredSubs.get(itemKey(item));
     if (!kept) {
       paths.push(`subquestions[${index}]`);
-      removedSubs.push(item.code);
+      removedSubs.push({ code: item.code, scale: item.scale_id ?? 0 });
     } else if (item.default !== undefined && kept.default === undefined) {
       paths.push(`subquestions[${index}].default`);
     }
@@ -316,10 +535,46 @@ function removals(current: ComparableQuestion, desired: ComparableQuestion): { p
   return { paths, subquestions: removedSubs, answers: removedAnswers };
 }
 
-async function questionRisks(input: RiskInput): Promise<Risk[]> {
+/**
+ * The names other expressions use for what the end state renames or removes: the old code (on a new code); for removed
+ * subquestions CODE_SQ (P also CODE_SQcomment; : and ; a removed row CODE_row..., a removed column CODE_<row>_col); for
+ * a dropped "Other" option CODE_other (P also CODE_othercomment).
+ */
+function referenceTokens(current: ComparableQuestion, desired: ComparableQuestion, removedSubs: ReadonlyArray<{ code: string; scale: number }>): Array<{ name: string; pattern: RegExp }> {
+  const code = current.code;
+  const tokens: Array<{ name: string; pattern: RegExp }> = [];
+  const add = (name: string, source: string): void => {
+    tokens.push({ name, pattern: new RegExp(`(?<![A-Za-z0-9_])${source}(?![A-Za-z0-9])`) });
+  };
+  const literal = (text: string): string => escapeRegExp(text);
+  if (desired.code !== code) add(code, literal(code));
+  const matrix = current.type === ":" || current.type === ";";
+  for (const sub of removedSubs) {
+    if (matrix && sub.scale === 1) add(`${code}_*_${sub.code}`, `${literal(code)}_[A-Za-z0-9]+_${literal(sub.code)}`);
+    else add(`${code}_${sub.code}`, `${literal(code)}_${literal(sub.code)}`);
+    if (current.type === "P") add(`${code}_${sub.code}comment`, `${literal(code)}_${literal(sub.code)}comment`);
+  }
+  if (current.other && !desired.other) {
+    add(`${code}_other`, `${literal(code)}_other`);
+    if (current.type === "P") add(`${code}_othercomment`, `${literal(code)}_othercomment`);
+  }
+  return tokens;
+}
+
+/** Whether an expression compares with the answer code: quoted ('A2', "A2") or after a comparison operator (== 3). */
+function comparesWith(expression: string, answerCode: string): boolean {
+  const code = escapeRegExp(answerCode);
+  if (expression.includes(`'${answerCode}'`) || expression.includes(`"${answerCode}"`)) return true;
+  const operator = "(?:==|!=|<=|>=|<|>|\\b(?:eq|ne|lt|gt|le|ge)\\b)";
+  return new RegExp(`${operator}\\s*${code}(?![A-Za-z0-9_.])`).test(expression)
+    || new RegExp(`(?<![A-Za-z0-9_.'"])${code}\\s*${operator}`).test(expression);
+}
+
+async function questionRisks(input: RiskInput): Promise<{ risks: Risk[]; notes: string[] }> {
   const { rpc, mode, current, raw, desired } = input;
   const risks: Risk[] = [];
-  if (mode === "none") return risks;
+  const notes: string[] = [];
+  if (mode === "none") return { risks, notes };
   const replace = mode === "replace";
 
   // Data URIs: LimeSurvey removes them from every text of a row it saves (also from texts this call does not change).
@@ -392,6 +647,18 @@ async function questionRisks(input: RiskInput): Promise<Risk[]> {
         locations: gaps,
       });
     }
+    if (input.unreadable.length > 0) {
+      risks.push({
+        code: "unreadable_texts",
+        blocking: true,
+        acknowledgeable: true,
+        detail: "Some texts of the question exist but cannot be read in a language, because the question has no text row there "
+          + "(answer texts, language-dependent attributes). The replacement writes the base-language text in their place, so "
+          + "the stored texts are lost; acknowledge fill_translation_gaps to accept that, or add the missing text row first "
+          + "(limesurvey_update_survey_texts) and read the question again.",
+        locations: input.unreadable.map((item) => `${item.path} (${item.language})`),
+      });
+    }
     risks.push({
       code: "undefined_attributes",
       blocking: false,
@@ -401,43 +668,54 @@ async function questionRisks(input: RiskInput): Promise<Risk[]> {
     });
   }
 
-  const codeChanged = desired.code !== current.code;
-  const tokens = [...(codeChanged ? [current.code] : []), ...(replace ? removed.subquestions.map((code) => `${current.code}_${code}`) : [])];
+  const tokens = referenceTokens(current, desired, replace ? removed.subquestions : []);
   if (tokens.length > 0 || replace) {
-    const sources = await readReferenceSources(rpc, input.surveyId, input.languages, input.questionId);
-    const patterns = tokens.map(tokenPattern);
-    const codeHits = sources.filter((source) => patterns.some((pattern) => pattern.test(source.text))).map((source) => source.location);
+    const sources = await readReferenceSources(rpc, input.surveyId, input.languages, { questionId: input.questionId, question: desired });
+    /** The locations whose searchable parts match. */
+    const hits = (match: (expression: string) => boolean): string[] => [...new Set(sources
+      .filter((source) => searchable(source).some(match))
+      .map((source) => source.location))];
+    const codeHits = hits((expression) => tokens.some((token) => token.pattern.test(expression)));
     if (codeHits.length > 0) {
       risks.push({
         code: "code_references",
         blocking: true,
         acknowledgeable: false,
-        detail: `Other parts of the survey name ${tokens.join(", ")}, which the end state renames or removes; these expressions or `
-          + "texts would break. Change them first (or keep the code).",
+        detail: `Parts of the survey name ${tokens.map((token) => token.name).join(", ")}, which the end state renames or removes; these `
+          + "expressions or texts would break. Change them first (or keep the code and the fields).",
         locations: codeHits,
       });
     }
     if (replace) {
-      const qidPatterns = [
-        new RegExp(`(?<![A-Za-z0-9_])Q${input.questionId}(?![0-9])`),
-        new RegExp(`(?<![0-9])${input.surveyId}X${input.groupId}X${input.questionId}(?![0-9])`),
-      ];
-      const qidHits = sources.filter((source) => qidPatterns.some((pattern) => pattern.test(source.text))).map((source) => source.location);
+      // The new question gets a new ID. {sid}X{gid}X{qid} (and INSERTANS) names a question by its ID on both generations;
+      // Q{qid} only on LimeSurvey 7, and only when no question of the survey has that code.
+      const sgqa = new RegExp(`(?<![0-9])${input.surveyId}X${input.groupId}X${input.questionId}(?![0-9])`);
+      const qidName = `Q${input.questionId}`;
+      const qidPattern = new RegExp(`(?<![A-Za-z0-9_])${qidName}(?![0-9])`);
+      const qidHits = hits((expression) => qidPattern.test(expression));
+      let byId = hits((expression) => sgqa.test(expression));
       if (qidHits.length > 0) {
+        if (input.outline.questionCodes.some((code) => code.toLowerCase() === qidName.toLowerCase())) {
+          notes.push(`${qidName} is also the code of a question of the survey, so its mentions (${qidHits.slice(0, 10).join(", ")}`
+            + `${qidHits.length > 10 ? ", ..." : ""}) are taken as that code, not as the ID of this question. Check them by hand if one `
+            + "means this question.");
+        } else if (await input.generation() === 7) {
+          byId = [...new Set([...byId, ...qidHits])];
+        }
+      }
+      if (byId.length > 0) {
         risks.push({
           code: "sgqa_references",
           blocking: true,
           acknowledgeable: false,
-          detail: `Other parts of the survey name the question by its ID (Q${input.questionId}, ${input.surveyId}X${input.groupId}X`
-            + `${input.questionId} or INSERTANS); the new question has a new ID, so these references would break.`,
-          locations: qidHits,
+          detail: `Parts of the survey name the question by its ID (${input.surveyId}X${input.groupId}X${input.questionId}, INSERTANS or, `
+            + `on LimeSurvey 7, ${qidName}); the new question has a new ID, so these references would break.`,
+          locations: byId,
         });
       }
       if (removed.answers.length > 0) {
         const codePattern = tokenPattern(current.code);
-        const answerHits = sources.filter((source) => codePattern.test(source.text)
-          && removed.answers.some((code) => source.text.includes(`'${code}'`) || source.text.includes(`"${code}"`)))
-          .map((source) => source.location);
+        const answerHits = hits((expression) => codePattern.test(expression) && removed.answers.some((code) => comparesWith(expression, code)));
         if (answerHits.length > 0) {
           risks.push({
             code: "answer_code_references",
@@ -451,10 +729,11 @@ async function questionRisks(input: RiskInput): Promise<Risk[]> {
       }
     }
   }
-  return risks;
+  return { risks, notes };
 }
 
-const acknowledgementOf = (code: string): string => (code === "translation_gaps" ? "fill_translation_gaps" : code);
+/** translation_gaps and unreadable_texts are confirmed with fill_translation_gaps; every other risk with its own code. */
+const acknowledgementOf = (code: string): string => (code === "translation_gaps" || code === "unreadable_texts" ? "fill_translation_gaps" : code);
 
 function planFor(mode: Mode | "rejected", input: { questionId: number; groupId: number; position: number; rename: boolean; columns: string[]; changes: readonly Change[] }): string[] {
   const textLanguages = [...new Set(input.changes.filter((item) => item.kind === "text").map((item) => item.path.split(".").pop() ?? ""))];
@@ -535,6 +814,8 @@ interface TextWrite {
   qid: number;
   data: JsonObject;
   undo: JsonObject;
+  /** For a subquestion: its key (scale:code). */
+  sub?: string;
 }
 
 /** The text of a spec value in one language: one string counts for every language. */
@@ -571,7 +852,10 @@ function textWrites(input: {
     const sub = current.subquestions[index];
     const qid = sub === undefined ? undefined : input.subquestionIds.get(itemKey(sub));
     if (sub === undefined || qid === undefined) {
-      throw new LimeSurveyError(`The subquestion at subquestions[${index}] was not found in the survey.`, "UNEXPECTED_RESPONSE");
+      throw new LimeSurveyError(`The subquestion at subquestions[${index}] was not found in the survey. Nothing was written.`, "UNEXPECTED_RESPONSE", {
+        path: `subquestions[${index}]`,
+        recovery: "Read the question again with limesurvey_get_survey_spec (it may have changed) and call the tool again with that spec.",
+      });
     }
     const given = desiredSubs.find((item) => `${Math.trunc(Number(item.scale_id ?? 0)) || 0}:${asString(item.code).trim()}` === itemKey(sub));
     const texts = subs.get(qid) ?? new Map<string, string>();
@@ -600,7 +884,8 @@ function textWrites(input: {
       data[language] = { question: text };
       undo[language] = { question: raw.subquestions[index]?.text[language] ?? "" };
     }
-    writes.push({ qid, data: { questionl10ns: data }, undo: { questionl10ns: undo } });
+    const sub = current.subquestions[index];
+    writes.push({ qid, data: { questionl10ns: data }, undo: { questionl10ns: undo }, ...(sub !== undefined ? { sub: itemKey(sub) } : {}) });
   }
   return writes;
 }
@@ -671,10 +956,47 @@ function replacementSpec(desiredInput: Record<string, unknown>, current: Compara
     }
     return result;
   };
-  const items = (list: unknown, now: ReadonlyArray<{ code: string; scale_id?: number; text: TextMap }>, stored: ReadonlyArray<{ text: TextMap }>) => (
+  /** One value: the stored one when the end state does not change it (compared in the normal form). */
+  const keep = (value: unknown, now: string | undefined, stored: string | undefined): unknown => {
+    if (typeof value !== "string" && typeof value !== "number") return value;
+    return now !== undefined && stored !== undefined && normalText(asString(value)) === now ? stored : value;
+  };
+  /** A default value (a string, or a map that may name some languages): unchanged values as stored. */
+  const keepDefault = (value: unknown, now: string | TextMap | undefined, stored: string | TextMap | undefined): unknown => {
+    if (isRecord(value)) {
+      return Object.fromEntries(Object.entries(value).map(([language, item]) => [
+        language,
+        keep(item, isRecord(now) ? now[language] : undefined, isRecord(stored) ? stored[language] : undefined),
+      ]));
+    }
+    return keep(value, typeof now === "string" ? now : undefined, typeof stored === "string" ? stored : undefined);
+  };
+  /** Attributes: unchanged values as stored; a language a per-language value lacks gets the base-language value. */
+  const attributes = (value: unknown): unknown => {
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => {
+      const now = current.attributes[name];
+      const stored = raw.attributes[name];
+      if (!isRecord(item)) return [name, keep(item, typeof now === "string" ? now : undefined, typeof stored === "string" ? stored : undefined)];
+      const given = Object.fromEntries(Object.entries(item).map(([language, text]) => [language, asString(text)]));
+      return [name, Object.fromEntries(languages.map((language) => [
+        language,
+        keep(given[language] ?? given[base] ?? Object.values(given)[0] ?? "", isRecord(now) ? now[language] : undefined, isRecord(stored) ? stored[language] : undefined),
+      ]))];
+    }));
+  };
+  const items = (
+    list: unknown,
+    now: ReadonlyArray<{ code: string; scale_id?: number; text: TextMap; default?: string | TextMap }>,
+    stored: ReadonlyArray<{ text: TextMap; default?: string | TextMap }>,
+  ) => (
     (Array.isArray(list) ? list.filter(isRecord) : []).map((item) => {
       const index = now.findIndex((entry) => itemKey(entry) === `${Math.trunc(Number(item.scale_id ?? 0)) || 0}:${asString(item.code).trim()}`);
-      return { ...item, text: merge(item.text, now[index]?.text, stored[index]?.text, normalText) };
+      return {
+        ...item,
+        text: merge(item.text, now[index]?.text, stored[index]?.text, normalText),
+        ...(item.default !== undefined ? { default: keepDefault(item.default, now[index]?.default, stored[index]?.default) } : {}),
+      };
     })
   );
   return {
@@ -684,6 +1006,9 @@ function replacementSpec(desiredInput: Record<string, unknown>, current: Compara
     script: merge(desiredInput.script, current.script, raw.script, normalScript),
     subquestions: items(desiredInput.subquestions, current.subquestions, raw.subquestions),
     answers: items(desiredInput.answers, current.answers, raw.answers),
+    ...(desiredInput.attributes !== undefined ? { attributes: attributes(desiredInput.attributes) } : {}),
+    ...(desiredInput.default !== undefined ? { default: keepDefault(desiredInput.default, current.default, raw.default) } : {}),
+    ...(desiredInput.default_other !== undefined ? { default_other: keepDefault(desiredInput.default_other, current.default_other, raw.default_other) } : {}),
   };
 }
 
@@ -948,12 +1273,13 @@ function questionResult(
   head: JsonObject,
   verification?: JsonObject,
 ): JsonValue {
-  type Lists = typeof lists;
-  const build = (cut: Lists): JsonValue => ({
+  type Others = { changes: Change[]; warnings: SpecWarning[]; differences: SpecDifference[] };
+  const others: Others = { changes: lists.changes, warnings: lists.warnings, differences: lists.differences };
+  const build = (cut: Others, risks: JsonObject[]): JsonValue => ({
     ...head,
     changes: json(cut.changes),
     changes_total: lists.changes.length,
-    risks: json(cut.risks),
+    risks: json(risks),
     ...(verification !== undefined
       ? {
         verification: {
@@ -966,10 +1292,14 @@ function questionResult(
       }
       : {}),
     ...(lists.warnings.length > 0 ? { warnings: json(cut.warnings), warnings_total: lists.warnings.length } : {}),
-    truncated: cut.changes.length < lists.changes.length || cut.risks.length < lists.risks.length
+    truncated: cut.changes.length < lists.changes.length || risks.length < lists.risks.length || locationsCut(risks)
       || cut.warnings.length < lists.warnings.length || cut.differences.length < lists.differences.length,
   });
-  return build(capLists<Lists>(lists, (shown) => structuredSize(limit.workflow, build(shown)) <= limit.maxChars));
+  const fits = (value: JsonValue): boolean => structuredSize(limit.workflow, value) <= limit.maxChars;
+  const othersFor = (risks: JsonObject[]): Others => capLists<Others>(others, (shown) => fits(build(shown, risks)));
+  // The locations of the risks are cut before the risks themselves.
+  const risks = fitRisks(lists.risks, (shown) => fits(build(othersFor(shown), shown)));
+  return build(othersFor(risks), risks);
 }
 
 export async function updateQuestionFromSpec(context: UpdateContext, input: UpdateQuestionInput): Promise<JsonValue> {
@@ -995,14 +1325,26 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
   const raw = read.raw.groups[0]?.questions[0];
   const before = outline.groups.find((group) => group.group_id === layoutGroup?.group_id)?.questions;
   if (!layoutGroup || !current || !raw || !before || position < 1) {
-    throw new LimeSurveyError(`Question ${questionId} could not be read from survey ${surveyId}.`, "UNEXPECTED_RESPONSE", { survey_id: surveyId, question_id: questionId });
+    throw new LimeSurveyError(`Question ${questionId} could not be read from survey ${surveyId}.`, "UNEXPECTED_RESPONSE", {
+      survey_id: surveyId,
+      question_id: questionId,
+      recovery: "Read the question with limesurvey_get_survey_spec (survey_id and question_id) to see whether LimeSurvey reports it, then "
+        + "call the tool again.",
+    });
   }
   const groupId = layoutGroup.group_id;
   const currentFingerprint = fingerprint(current);
   const prefix = `groups[${groupIndex}].questions[${position - 1}].`;
-  const ownGaps = read.missing_translations
+  const relative = (items: ReadonlyArray<{ path: string; language: string }>): Array<{ path: string; language: string }> => items
     .filter((item) => item.path.startsWith(prefix))
     .map((item) => ({ path: item.path.slice(prefix.length), language: item.language }));
+  const ownGaps = relative(read.missing_translations);
+  // Texts that exist but cannot be read in a language (no text row there): answer texts and language-dependent attributes
+  // (reported at the path attributes, which stands for every attribute that is a map).
+  const unreadable = relative(read.unreadable);
+  const unreadablePaths = unreadable.flatMap((item) => (item.path === "attributes"
+    ? Object.entries(current.attributes).filter(([, value]) => typeof value !== "string").map(([name]) => `attributes.${name}`)
+    : [item.path]));
 
   // 3. The spec against the survey: its languages, the codes of the other questions, the generation for a Ranking question.
   const ranking = current.type === "R" || desiredInput.type === "R";
@@ -1011,7 +1353,7 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
     languages,
     existingQuestionCodes: outline.questionCodes.filter((code) => code.toLowerCase() !== current.code.toLowerCase()),
     allowDataUri: true,
-    subsetPaths: new Set(ownGaps.map((item) => item.path)),
+    subsetPaths: new Set([...ownGaps.map((item) => item.path), ...unreadablePaths]),
     ...(generation !== undefined ? { rankingGeneration: generation } : {}),
   });
   if (!validation.valid) throw specInvalidError(validation.errors, limit);
@@ -1044,18 +1386,33 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
     );
   }
 
-  const risks = rejected
-    ? []
-    : await questionRisks({ rpc, surveyId, questionId, groupId, mode, changes, current, raw, desired, outline, languages, ownGaps });
+  const { risks, notes } = rejected
+    ? { risks: [] as Risk[], notes: [] as string[] }
+    : await questionRisks({
+      rpc,
+      surveyId,
+      questionId,
+      groupId,
+      mode,
+      changes,
+      current,
+      raw,
+      desired,
+      outline,
+      languages,
+      ownGaps,
+      unreadable,
+      generation: () => limeSurveyGeneration(rpc, context.client),
+    });
   const columns = [...new Set(changes.filter((item) => item.kind === "column").map((item) => item.path.split(".")[0] ?? ""))];
-  const plan = planFor(rejected ? "rejected" : mode, {
+  const plan = [...planFor(rejected ? "rejected" : mode, {
     questionId,
     groupId,
     position,
     rename: desired.code.toLowerCase() === current.code.toLowerCase(),
     columns,
     changes,
-  });
+  }), ...notes.map((note) => `Note: ${note}`)];
   const head: JsonObject = {
     survey_id: surveyId,
     question_id: questionId,
@@ -1072,21 +1429,22 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
   const acknowledged = new Set<string>(input.acknowledge ?? []);
   const blocking = risks.filter((risk) => risk.blocking && (!risk.acknowledgeable || !acknowledged.has(acknowledgementOf(risk.code))));
   if (blocking.length > 0) {
-    throw cappedError(
-      limit,
-      `The change is blocked by ${blocking.map((risk) => risk.code).join(", ")}. Nothing was written.`,
-      "UPDATE_QUESTION_BLOCKED",
-      { risks },
-      (cut) => ({
-        survey_id: surveyId,
-        question_id: questionId,
-        mode,
-        blocking: blocking.map((risk) => risk.code),
-        ...cutList("risks", cut.risks, risks),
-        recovery: "Read the risks. An acknowledgeable risk is confirmed with acknowledge (translation_gaps with "
-          + "fill_translation_gaps); a risk that is not acknowledgeable has to be resolved first (see its detail and locations).",
-      }),
-    );
+    const message = `The change is blocked by ${blocking.map((risk) => risk.code).join(", ")}. Nothing was written.`;
+    const details = (shown: JsonObject[]): JsonObject => ({
+      survey_id: surveyId,
+      question_id: questionId,
+      mode,
+      blocking: blocking.map((risk) => risk.code),
+      risks: json(shown),
+      risks_total: risks.length,
+      truncated: shown.length < risks.length || locationsCut(shown),
+      recovery: "Read the risks. An acknowledgeable risk is confirmed with acknowledge (translation_gaps and unreadable_texts with "
+        + "fill_translation_gaps); a risk that is not acknowledgeable has to be resolved first (see its detail and locations).",
+    });
+    const shown = fitRisks(risks, (cut) => (
+      structuredSize(limit.workflow, { status: "error", message, code: "UPDATE_QUESTION_BLOCKED", details: details(cut) }) <= limit.maxChars
+    ));
+    throw new LimeSurveyError(message, "UPDATE_QUESTION_BLOCKED", details(shown));
   }
 
   if (mode === "replace") {
@@ -1136,20 +1494,21 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
   // texts and columns: written in place on the same question.
   const failure = (step: string, value: unknown, rolledBack: boolean, manualCleanup: JsonObject[]): LimeSurveyError => {
     const cause = describeError(value);
-    return new LimeSurveyError(
-      `Changing question ${questionId} failed at step "${step}": ${cause.message} `
-        + (rolledBack ? "The old values were written back." : "ROLLBACK INCOMPLETE: see details.manual_cleanup."),
-      "UPDATE_QUESTION_FAILED",
-      {
-        failed_step: step,
-        ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
-        ...(cause.details !== undefined ? { cause: cause.details } : {}),
-        question_id: questionId,
-        rolled_back: rolledBack,
-        manual_cleanup: json(manualCleanup),
-        recovery: rolledBack ? RECOVERY_RETRY : "Check the question in the LimeSurvey admin (see manual_cleanup), then call the tool again.",
-      },
+    const message = `Changing question ${questionId} failed at step "${step}": ${cause.message} `
+      + (rolledBack ? "The old values were written back." : "ROLLBACK INCOMPLETE: see details.manual_cleanup.");
+    const details = (cleanup: JsonObject[]): JsonObject => ({
+      failed_step: step,
+      ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
+      ...(cause.details !== undefined ? { cause: cause.details } : {}),
+      question_id: questionId,
+      rolled_back: rolledBack,
+      manual_cleanup: json(cleanup),
+      recovery: rolledBack ? RECOVERY_RETRY : "Write the values of manual_cleanup back in the LimeSurvey admin (or check the question), then call the tool again.",
+    });
+    const fits = (cleanup: JsonObject[]): boolean => (
+      structuredSize(limit.workflow, { status: "error", message, code: "UPDATE_QUESTION_FAILED", details: details(cleanup) }) <= limit.maxChars
     );
+    return new LimeSurveyError(message, "UPDATE_QUESTION_FAILED", details(fitCleanup(manualCleanup, fits)));
   };
   const ids = changes.some((item) => item.kind === "text" && item.path.startsWith("subquestions"))
     ? await subquestionIds(rpc, surveyId, groupId, questionId)
@@ -1167,31 +1526,81 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
     }
   }
   // Each undo is registered before its write: a write that fails may have saved a part (LimeSurvey saves field by
-  // field), so the failed write is reset as well, with the stored values of the fields it sent.
-  const undo: Array<() => Promise<void>> = [];
+  // field), so the failed write is reset as well, with the stored values of the fields it sent. Each undo carries the
+  // checks that tell, after reading the question back, whether the old value is really there again.
+  interface Undo {
+    run: () => Promise<void>;
+    checks: Array<{ entry: JsonObject; restored: (back: ComparableQuestion) => boolean }>;
+  }
+  const field = (question: ComparableQuestion, name: string): unknown => (question as unknown as Record<string, unknown>)[name];
+  const textChecks = (write: TextWrite): Undo["checks"] => Object.entries(objectOf(write.undo.questionl10ns) ?? {}).flatMap(([language, old]) => (
+    Object.entries(objectOf(old) ?? {}).map(([name, value]) => {
+      const specField = name === "help" ? "help" : "text";
+      const sub = write.sub;
+      return {
+        entry: {
+          action: "restore_text",
+          question_id: write.qid,
+          ...(sub !== undefined ? { subquestion: sub.slice(sub.indexOf(":") + 1) } : {}),
+          language,
+          field: name,
+          value,
+        },
+        restored: (back: ComparableQuestion): boolean => {
+          if (sub === undefined) return ((field(back, specField) as TextMap)[language] ?? "") === ((field(current, specField) as TextMap)[language] ?? "");
+          const before = current.subquestions.find((item) => itemKey(item) === sub);
+          const after = back.subquestions.find((item) => itemKey(item) === sub);
+          return (after?.text[language] ?? "") === (before?.text[language] ?? "");
+        },
+      };
+    })
+  ));
+  const undo: Undo[] = [];
   let step = "columns";
   try {
     if (columns.length > 0) {
-      undo.push(() => setQuestion(rpc, questionId, columnUndo));
+      undo.push({
+        run: () => setQuestion(rpc, questionId, columnUndo),
+        checks: columns.map((name) => ({
+          entry: { action: "restore_column", question_id: questionId, field: COLUMN_PROPERTIES[name] ?? name, value: columnUndo[COLUMN_PROPERTIES[name] ?? name] ?? null },
+          restored: (back: ComparableQuestion) => canonicalJson(field(back, name)) === canonicalJson(field(current, name)),
+        })),
+      });
       await setQuestion(rpc, questionId, columnData);
     }
     step = "texts";
     for (const write of texts) {
-      undo.push(() => writeTexts(rpc, write.qid, write.undo));
+      undo.push({ run: () => writeTexts(rpc, write.qid, write.undo), checks: textChecks(write) });
       await writeTexts(rpc, write.qid, write.data);
     }
   } catch (value) {
-    const manualCleanup: JsonObject[] = [];
-    for (const action of undo.reverse()) {
+    const failed: string[] = [];
+    for (const action of [...undo].reverse()) {
       try {
-        await action();
+        await action.run();
       } catch (undoError) {
-        manualCleanup.push({ action: "restore", question_id: questionId, reason: causeOf(undoError) });
+        failed.push(causeOf(undoError));
       }
     }
-    throw failure(step, value, manualCleanup.length === 0, manualCleanup);
+    // The rollback counts only when the question, read back, holds the old values again.
+    let back: ComparableQuestion | undefined;
+    try {
+      back = (await readSurveySpec(rpc, surveyId, { questionId })).spec.groups[0]?.questions[0];
+    } catch {
+      back = undefined;
+    }
+    const checks = undo.flatMap((action) => action.checks);
+    const open = checks.filter((check) => back === undefined || !check.restored(back)).map((check) => check.entry);
+    const reasons = [...failed, ...(back === undefined ? ["the question could not be read back after the rollback"] : [])];
+    const manualCleanup = open.map((entry) => (reasons.length > 0 ? { ...entry, reason: reasons.join("; ") } : entry));
+    throw failure(step, value, open.length === 0 && back !== undefined, manualCleanup);
   }
-  const live = await readSurveySpec(rpc, surveyId, { questionId });
+  let live: SpecRead;
+  try {
+    live = await readSurveySpec(rpc, surveyId, { questionId });
+  } catch (value) {
+    throw verifyReadFailed(`Question ${questionId}`, value, { question_id: questionId, mode });
+  }
   const differences = verifyDifferences(read.spec.survey, desiredSpec, live, languages);
   const after = live.spec.groups[0]?.questions[0];
   return questionResult(limit, { ...lists, differences }, {
@@ -1325,7 +1734,16 @@ export async function updateSurveyTexts(context: UpdateContext, input: SurveyTex
 
   // 2. The survey: languages, groups, questions and subquestions (read methods only).
   const properties = objectOf(await rpc.call("get_survey_properties", [surveyId, ["language", "additional_languages", "active"]])) ?? {};
-  const base = asString(properties.language) || "de";
+  const base = asString(properties.language).trim();
+  if (base === "") {
+    // Without the base language no text can be placed; it is never guessed.
+    throw new LimeSurveyError(`get_survey_properties did not report the base language of survey ${surveyId}. Nothing was written.`, "UNEXPECTED_RESPONSE", {
+      survey_id: surveyId,
+      answer: json(properties),
+      recovery: "Check the survey with limesurvey_get_survey_properties (survey_id, settings [\"language\"]) and the permissions of the "
+        + "service account, then call the tool again.",
+    });
+  }
   const languages = [base, ...asString(properties.additional_languages).split(/[\s,;]+/).filter((item) => item !== "" && item !== base)];
   const active = properties.active === "Y";
   const groupRows = rowsOf(await rpc.call("list_groups", [surveyId, base]));
@@ -1398,6 +1816,7 @@ export async function updateSurveyTexts(context: UpdateContext, input: SurveyTex
     addTexts(`${path}.text`, question.text, { kind: "question", id: qid }, "question", false);
     addTexts(`${path}.help`, question.help, { kind: "question", id: qid }, "help", false);
     const subs = questionRows.filter((row) => integer(row.parent_qid) === qid);
+    const seenSubs = new Set<number>();
     (question.subquestions ?? []).forEach((sub, subIndex) => {
       const subPath = `${path}.subquestions[${subIndex}]`;
       const found = findCode(subs, sub.code).filter((row) => sub.scale_id === undefined || (integer(row.scale_id) ?? 0) === sub.scale_id);
@@ -1408,6 +1827,11 @@ export async function updateSurveyTexts(context: UpdateContext, input: SurveyTex
           : { path: `${subPath}.code`, message: `The question ${question.code} has no subquestion with the code ${sub.code}.`, fix: "Use a subquestion code of the question." });
         return;
       }
+      if (seenSubs.has(sqid)) {
+        errors.push({ path: `${subPath}.code`, message: `The subquestion ${sub.code} of ${question.code} is named twice.`, fix: "Name every subquestion once." });
+        return;
+      }
+      seenSubs.add(sqid);
       labels.set(`question:${sqid}`, `question ${asString(main.title)}_${asString(found[0]?.title)}`);
       addTexts(`${subPath}.text`, sub.text, { kind: "question", id: sqid }, "question", true);
     });
@@ -1578,35 +2002,53 @@ export async function updateSurveyTexts(context: UpdateContext, input: SurveyTex
           manualCleanup.push({ action: "restore", write: done.label, values: json(done.undo[1] ?? null), reason: causeOf(undoError) });
         }
       }
+      // The rollback counts only when the rows, read back, hold the old texts again; a text that is not back is named with its old value.
       let restoredRows = false;
       try {
         const now = await readRows(rpc, surveyId, refs);
-        restoredRows = changed.every((entry) => (now.get(rowKey(entry.row))?.[entry.field] ?? "") === (entry.current ?? ""));
+        const open = changed.filter((entry) => (now.get(rowKey(entry.row))?.[entry.field] ?? "") !== (entry.current ?? ""));
+        restoredRows = open.length === 0;
+        if (manualCleanup.length === 0) {
+          manualCleanup.push(...open.map((entry): JsonObject => ({
+            action: "restore_text",
+            row: describeRow(entry.row, labels),
+            language: entry.language,
+            field: entry.field,
+            value: entry.current ?? "",
+          })));
+        }
       } catch {
         restoredRows = false;
       }
       const rolledBack = manualCleanup.length === 0 && restoredRows;
       const cause = describeError(value);
-      throw new LimeSurveyError(
-        `Writing the texts failed at "${write.label}": ${cause.message} `
-          + (rolledBack ? "Every text this call wrote was reset." : "ROLLBACK INCOMPLETE: see details.manual_cleanup."),
-        "TEXT_UPDATE_FAILED",
-        {
-          failed_step: write.label,
-          ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
-          ...(cause.details !== undefined ? { cause: cause.details } : {}),
-          rolled_back: rolledBack,
-          manual_cleanup: json(manualCleanup),
-          recovery: rolledBack
-            ? "Fix the cause in the message (for example the permission of the service account) and call the tool again."
-            : "Check the texts named in manual_cleanup in the LimeSurvey admin, then call the tool again.",
-        },
+      const message = `Writing the texts failed at "${write.label}": ${cause.message} `
+        + (rolledBack ? "Every text this call wrote was reset." : "ROLLBACK INCOMPLETE: see details.manual_cleanup.");
+      const details = (cleanup: JsonObject[]): JsonObject => ({
+        failed_step: write.label,
+        ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
+        ...(cause.details !== undefined ? { cause: cause.details } : {}),
+        rolled_back: rolledBack,
+        manual_cleanup: json(cleanup),
+        manual_cleanup_total: manualCleanup.length,
+        recovery: rolledBack
+          ? "Fix the cause in the message (for example the permission of the service account) and call the tool again."
+          : "Write the old values of manual_cleanup back in the LimeSurvey admin (or check the texts there), then call the tool again.",
+      });
+      const fits = (cleanup: JsonObject[]): boolean => (
+        structuredSize(limit.workflow, { status: "error", message, code: "TEXT_UPDATE_FAILED", details: details(cleanup) }) <= limit.maxChars
       );
+      throw new LimeSurveyError(message, "TEXT_UPDATE_FAILED", details(fitCleanup(manualCleanup, fits)));
     }
   }
 
   // 6. Read the rows back: the written texts against the request, the other fields against before.
-  const after = await readRows(rpc, surveyId, refs);
+  let after: Map<string, Row | undefined>;
+  try {
+    after = await readRows(rpc, surveyId, refs);
+  } catch (value) {
+    throw verifyReadFailed("The texts", value, { survey_id: surveyId, changes_total: changes.length });
+  }
   const differences: JsonObject[] = changed
     .filter((entry) => normalText(after.get(rowKey(entry.row))?.[entry.field] ?? "").trim() !== normalText(entry.desired).trim())
     .map((entry) => ({ path: entry.path, language: entry.language, expected: entry.desired, actual: after.get(rowKey(entry.row))?.[entry.field] ?? null }));

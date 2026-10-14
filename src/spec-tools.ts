@@ -132,7 +132,9 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "Paths are 0-based, for example groups[1].questions[3].answers[0].code; for kind group and question they are "
         + "relative to the checked object (for example code). The check covers keys, question codes (pattern, length, "
         + "reserved words, duplicates), question types and the subquestions and answers each type needs, answer and "
-        + "subquestion codes, attribute names, language codes (each once, none equal to the base language), "
+        + "subquestion codes, attribute names, attributes that some question theme defines but the theme of the question "
+        + "does not (plugin attributes and unknown themes are not checked), a question_theme_name of another question type, "
+        + "language codes (each once, none equal to the base language), "
         + "survey.format, survey.expires (a real date and time), XML-forbidden characters and embedded data URIs. A text "
         + "is one string (for every language) or a map per language; the map must name exactly the languages of the "
         + "survey (a default value may name fewer); an empty question, subquestion or answer text is a warning. An "
@@ -617,11 +619,16 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "question_id and old_question_id. Blocking risks stop the call with UPDATE_QUESTION_BLOCKED before anything is "
         + "written: qid_bound_links (every replacement: URL parameters, archived responses, quota memberships of the old "
         + "ID), quota_members, other_default, removals, translation_gaps (import_question fills missing translations of the "
-        + "survey; acknowledge fill_translation_gaps) and answer_code_references can be acknowledged; code_references, "
-        + "sgqa_references and data_uri cannot. Errors: SPEC_INVALID, STALE_SPEC, SURVEY_ACTIVE (with the changes that need "
-        + "an inactive survey), UPDATE_QUESTION_BLOCKED, QUESTION_SURVEY_MISMATCH, REPLACE_QUESTION_FAILED (failed_step, "
-        + "rolled_back, manual_cleanup, differences), UPDATE_QUESTION_FAILED (texts and columns, with the old values "
-        + "written back). Texts of the survey, groups and questions alone go with limesurvey_update_survey_texts; a new "
+        + "survey) and unreadable_texts (texts of the question that cannot be read in a language get the base-language "
+        + "text; both acknowledged with fill_translation_gaps) and answer_code_references can be acknowledged; "
+        + "code_references (the old code or removed fields such as CODE_SQ, CODE_SQcomment, CODE_other named anywhere, the "
+        + "end state of the question included; free texts are searched inside {...} only), sgqa_references and data_uri "
+        + "cannot. Each risk lists at most a part of its locations (locations_total). Errors: SPEC_INVALID, STALE_SPEC, "
+        + "SURVEY_ACTIVE (with the changes that need an inactive survey), UPDATE_QUESTION_BLOCKED, QUESTION_SURVEY_MISMATCH, "
+        + "REPLACE_QUESTION_FAILED (failed_step, rolled_back, manual_cleanup, differences), UPDATE_QUESTION_FAILED (texts "
+        + "and columns; the old values are written back and read back, manual_cleanup names what is not back), "
+        + "VERIFY_READ_FAILED (written: true; only the read-back failed). Texts of the survey, groups and questions alone go "
+        + "with limesurvey_update_survey_texts; a new "
         + "question with limesurvey_add_question_from_spec. Needs the write scope content (dry run: none).",
       inputSchema: strictInput({
         survey_id: surveyId,
@@ -635,7 +642,7 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         ),
         acknowledge: z.array(z.enum(UPDATE_ACKNOWLEDGEMENTS)).optional().describe(
           "Confirmed risks of the dry run: qid_bound_links, quota_members, other_default, removals, fill_translation_gaps "
-          + "(for the risk translation_gaps) and answer_code_references.",
+          + "(for the risks translation_gaps and unreadable_texts) and answer_code_references.",
         ),
         confirm_destructive_action: z.literal(true).optional().describe(
           "Must be true for a real run (dry_run not true): a replacement deletes the old question.",
@@ -693,7 +700,9 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "differences }, side_effects (for example empty mail templates LimeSurvey fills on saving), collateral_changes "
         + "(other fields of the saved rows that changed), fingerprint }. dry_run true only reads (write scope none) and "
         + "shows the changes; its fingerprint can be passed as expected_fingerprint. If a write fails, every text the call "
-        + "wrote is reset (TEXT_UPDATE_FAILED with rolled_back). Needs the write scope content (dry run: none).",
+        + "wrote is reset and read back (TEXT_UPDATE_FAILED with rolled_back; manual_cleanup names the old values that are not "
+        + "back); if only the read-back after the writes fails, VERIFY_READ_FAILED says written: true. A subquestion, question "
+        + "or group named twice answers SPEC_INVALID. Needs the write scope content (dry run: none).",
       inputSchema: strictInput({
         survey_id: surveyId,
         texts: z.strictObject({

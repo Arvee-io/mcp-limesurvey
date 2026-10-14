@@ -39,7 +39,7 @@ import {
   unescapeStrings,
   type SpecKind,
 } from "./spec-model.js";
-import { ATTRIBUTE_NAMES, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "./attribute-defaults.js";
+import { ATTRIBUTE_NAMES, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES, THEME_TYPES } from "./attribute-defaults.js";
 
 /** The attribute names per question theme (core and extended themes of LimeSurvey 6 and 7). */
 const THEME_ATTRIBUTES: ReadonlyMap<string, ReadonlySet<string>> = new Map(
@@ -613,6 +613,17 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
       `The question theme name ${typeof theme === "string" ? JSON.stringify(theme) : describeValue(theme)} is invalid.`,
       "Give the name of a question theme such as listradio or bootstrap_buttons, or leave question_theme_name out for the base theme of the type.",
     );
+  } else if (typeof theme === "string" && theme !== CORE_THEME && typeof question.type === "string") {
+    // A theme the tables know serves certain types only (design 9.27); a theme they do not know (a custom one) is not checked.
+    const types = Object.hasOwn(THEME_TYPES, theme) ? THEME_TYPES[theme] : undefined;
+    if (types !== undefined && types.length > 0 && !types.includes(question.type)) {
+      const base = BASE_THEME_BY_TYPE[question.type];
+      findings.error(
+        keyPath(path, "question_theme_name"),
+        `The question theme ${theme} is for type${types.length === 1 ? "" : "s"} ${types.join(", ")}, not for type ${question.type}.`,
+        `Use a question theme of type ${question.type}${base !== undefined ? ` (for example ${base})` : ""}, or leave question_theme_name out.`,
+      );
+    }
   }
   const mandatory = question.mandatory;
   if (mandatory !== undefined && typeof mandatory !== "boolean" && mandatory !== "soft") {
