@@ -453,7 +453,7 @@ for (const [label, name] of BAD_ATTRIBUTE_NAMES) {
 
 test("[GEN-E] validate_spec accepts attribute names of 1 to 50 letters, digits and underscores that start with a letter", async () => {
   await withSession(async (session) => {
-    const names = ["display_columns", "A1_b", "x", `a${"b".repeat(49)}`];
+    const names = ["maximum_chars", "A1_b", "x", `a${"b".repeat(49)}`];
     const result = await validate(session, surveyWith([question("Q01", { attributes: Object.fromEntries(names.map((name) => [name, "1"])) })]));
     assert.ok(!result.errors.some((item) => item.path.startsWith(`${Q0}.attributes`)), JSON.stringify(result.errors));
   });
