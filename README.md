@@ -449,23 +449,31 @@ path, which keeps them usable from remote MCP clients.
   the survey without regard to case, not a reserved word such as `SID`);
   subquestion codes alphanumeric (at most 20, not `time`); answer codes
   alphanumeric with at most 5 characters (LimeSurvey drops longer codes without a
-  message).
+  message). Ranking (`R`) items are answers on LimeSurvey 6 and subquestions on
+  LimeSurvey 7; on 7 an item may have a code of up to 20 characters and its own
+  `relevance`, on 6 such an item is rejected before anything is written. The tools
+  tell the version with one read call (`get_group_properties` for the group 0).
 - Texts: every text field (survey title, description, welcome and end text, group
   title and description, question text, help and script, subquestion and answer
   texts) is a string, which applies to every survey language, or a map per
   language such as `{"de": "Frage", "en": "Question"}`. A map must cover exactly
   the survey languages; a missing translation is an error with its path, never a
   silent copy. Default values (`default`, `default_other`, subquestion `default`)
-  may cover only some languages.
+  may cover only some languages. Survey and group titles must not be empty; an empty
+  question, subquestion, or answer text is only a warning.
 - Language-dependent attributes (`prefix`, `suffix`, `em_validation_q_tip`,
   `other_replace_text`, `dualscale_headerA` and the other ten of LimeSurvey's list)
-  take a string or a map and are written once per language; other attributes take
-  one value.
+  take a string or a map and are written once per language, as are attributes that
+  LimeSurvey stores per language for plugins or custom question themes; the
+  attributes of the core themes that do not depend on the language take one value.
 - Optional fields for round trips of surveys built in the admin UI: `preg`,
   `question_theme_name` (extended themes such as `bootstrap_buttons`), `encrypted`,
   `same_default`, `same_script`, `modulename`, `script`, `default`, `default_other`,
   subquestion `relevance` and `default`, group `randomization_group`; the survey's
   yes/no settings and `format` also take `"inherit"`/`"I"`.
+- `default` is allowed on question types without subquestions except `R` and `|`,
+  subquestion `default` on types with subquestions, and `default_other` on `L` and
+  `!` with `other`; elsewhere LimeSurvey stores a default but never uses it.
 - `mandatory` is `true`, `false`, or `"soft"`. `expires` is `YYYY-MM-DD HH:MM:SS`
   or `YYYY-MM-DD` (end of day).
 - Texts may use HTML entities; references that end with `;` and do not stand for
@@ -486,14 +494,22 @@ question; its `spec` can be passed unchanged to `limesurvey_create_survey_from_s
 (a survey) and to the group and question tools. Texts always come as maps per
 language. Attribute values equal to the theme default are left out, default
 values come from `get_fieldmap`, and Ranking items come back as `answers` on
-LimeSurvey 6 and 7 alike. `unreadable` lists what RemoteControl cannot read and a
-later replacement would therefore lose: legacy conditions (their logic stays in
-the stored relevance), quota members, and URL parameter assignments; plus the
-"other" default of multiple choice questions. `missing_translations` lists texts
-without a row in a survey language. When the result would exceed
+LimeSurvey 6 and 7 alike. Texts keep their leading and trailing spaces, `script`
+and `preg` come back with LF line endings (as LimeSurvey stores them after an
+import), and the theme `core` of old imports counts as the base theme.
+`unreadable` lists what RemoteControl cannot read and a later replacement would
+therefore lose: legacy conditions (their logic stays in the stored relevance),
+quota members, URL parameter assignments, stored attributes that the question
+type or theme does not define, archived responses, and on survey level the
+settings outside the spec (navigation, participant and assessment settings,
+email templates, URL, privacy texts, date and number format); plus the "other"
+default of multiple choice questions. Entries tied to an element carry `path`
+and `language`. `missing_translations` lists every text field without a row in a
+survey language. When the result would exceed
 `LIMESURVEY_MAX_RESPONSE_CHARS`, the tool answers `SPEC_TOO_LARGE` with an
 outline (`group_id`, title, number of questions, estimated size) to read group
 by group.
+
 ### Verification
 
 After the import the survey is read back with read methods only and compared

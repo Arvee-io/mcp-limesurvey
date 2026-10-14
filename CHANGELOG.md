@@ -42,6 +42,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Language-dependent attributes such as `prefix` or `em_validation_q_tip` are
   written with one row per language. The Python generator wrote them without a
   language, and LimeSurvey ignores such rows, so the setting had no effect.
+- Ranking (`R`) items are written as subquestions on LimeSurvey 7, where they may
+  have codes of up to 20 characters and their own relevance; one read call tells
+  the version. On LimeSurvey 6 they stay answers.
+- An empty question, subquestion or answer text is a warning instead of an error;
+  `default` is rejected on question types where LimeSurvey never uses it.
 
 ## [1.5.1] - 2026-10-14
 
