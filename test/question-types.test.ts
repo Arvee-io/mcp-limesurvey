@@ -463,6 +463,27 @@ for (const generation of GENERATIONS) {
   });
 }
 
+test("[GEN-TYPES] a spec that lists scale-1 entries before scale-0 entries is valid, verifies after create_survey_from_spec, and get_survey_spec gives the entries ordered by scale (stable within a scale)", async () => {
+  const mixed = typesSurvey();
+  const questions = mixed.groups[0].questions as Json[];
+  const t1 = questions.find((item) => item.code === "T1");
+  const t2 = questions.find((item) => item.code === "T2");
+  assert.ok(t1 && t2);
+  // T1: A1 (1), A1 (0), A2 (1), A2 (0), A3 (1); T2: column SQ002, row SQ001, column SQ001, row SQ002.
+  t1.answers = [2, 0, 3, 1, 4].map((index) => t1.answers[index]);
+  t2.subquestions = [3, 0, 2, 1].map((index) => t2.subquestions[index]);
+  const fake = new FakeLimeSurvey({ generation: 7 });
+  await withSession(async (session) => {
+    const validated = await validateSpec(session, mixed);
+    assert.equal(validated.valid, true, JSON.stringify(validated.errors));
+    const created = await createOk(session, mixed);
+    assert.equal(created.verification?.ok, true, JSON.stringify(created.verification));
+    const read = questionsByCode((await readOk(session, { survey_id: Number(created.survey_id) })).spec);
+    assert.deepEqual(read.get("T1")?.answers.map((item: Json) => [item.code, item.scale_id ?? 0]), [["A1", 0], ["A2", 0], ["A1", 1], ["A2", 1], ["A3", 1]]);
+    assert.deepEqual(read.get("T2")?.subquestions.map((item: Json) => [item.code, item.scale_id ?? 0]), [["SQ001", 0], ["SQ002", 0], ["SQ002", 1], ["SQ001", 1]]);
+  }, { fake });
+});
+
 // ================================================================ 4: built in the admin
 
 /** Built in the admin: T1 with the answer codes 0..n-1 on each scale (PHP answers a list), T2 with SQ001 on both scales. */
