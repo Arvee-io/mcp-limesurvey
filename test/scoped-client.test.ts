@@ -136,6 +136,61 @@ test("[GEN-E] scopedClient: an allowlist only narrows; it opens neither a .lsa i
   await assertPasses(none, calls, "get_survey_properties", [1, ["language"]]);
 });
 
+// ---- Review of PR4: deleting only what the call created ----
+
+interface CreatedScope {
+  writeMethods?: readonly string[];
+  /** The survey of the call and the ids it created itself (its rollback may delete exactly these). */
+  created?: { surveyId: number; questions: Set<number>; groups: Set<number> };
+}
+
+/** The signature with surveyId in created; the cast keeps the test compiling before it exists. */
+const scopedWithCreated = scopedClient as unknown as (client: RpcClient, level: ClientLevel, options?: CreatedScope) => RpcClient;
+
+const createdIds = (): NonNullable<CreatedScope["created"]> => ({ surveyId: 1, questions: new Set([5]), groups: new Set([9]) });
+
+test("[GEN-A] scopedClient with created question 5 passes delete_question [5] and [\"5\"] at level content", async () => {
+  const { inner, calls } = spy();
+  const client = scopedWithCreated(inner, "content", { writeMethods: ["import_question"], created: createdIds() });
+  await assertPasses(client, calls, "delete_question", [5]);
+  await assertPasses(client, calls, "delete_question", ["5"]);
+});
+
+test("[GEN-A] scopedClient with created question 5 rejects delete_question [6], [] and [null] without reaching LimeSurvey", async () => {
+  const { inner, calls } = spy();
+  const client = scopedWithCreated(inner, "content", { writeMethods: ["import_question"], created: createdIds() });
+  await assertRejected(client, calls, "delete_question", [6]);
+  await assertRejected(client, calls, "delete_question", []);
+  await assertRejected(client, calls, "delete_question", [null]);
+  assert.deepEqual(calls, []);
+});
+
+test("[GEN-C] scopedClient passes delete_group only for the survey of the call and a created group: [1, 9] passes; [2, 9], [1, 8] and [9] are rejected", async () => {
+  const { inner, calls } = spy();
+  const client = scopedWithCreated(inner, "content", { writeMethods: ["import_group"], created: createdIds() });
+  await assertRejected(client, calls, "delete_group", [2, 9]);
+  await assertRejected(client, calls, "delete_group", [1, 8]);
+  await assertRejected(client, calls, "delete_group", [9]);
+  await assertPasses(client, calls, "delete_group", [1, 9]);
+});
+
+test("[GEN-A] scopedClient rejects delete_survey and delete_language although the call created ids", async () => {
+  const { inner, calls } = spy();
+  const client = scopedWithCreated(inner, "content", { created: createdIds() });
+  await assertRejected(client, calls, "delete_survey", [1]);
+  await assertRejected(client, calls, "delete_language", [1, "en"]);
+  await assertRejected(client, calls, "delete_survey", [5]);
+  assert.deepEqual(calls, []);
+});
+
+test("[GEN-A] scopedClient level none rejects delete_question [5] although 5 is a created id", async () => {
+  const { inner, calls } = spy();
+  const client = scopedWithCreated(inner, "none", { created: createdIds() });
+  await assertRejected(client, calls, "delete_question", [5]);
+  await assertRejected(client, calls, "delete_group", [1, 9]);
+  assert.deepEqual(calls, []);
+});
+
 test("[GEN-E] scopedClient: an empty writeMethods list allows no write at all, only reads", async () => {
   const { inner, calls } = spy();
   const client = scopedWithOptions(inner, "content", { writeMethods: [] });

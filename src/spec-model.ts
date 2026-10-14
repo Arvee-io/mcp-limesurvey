@@ -188,6 +188,15 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Whether a spec of this kind has a question of type R (Ranking). */
+export function hasRankingQuestion(kind: SpecKind, spec: unknown): boolean {
+  const isRanking = (question: unknown): boolean => isRecord(question) && question.type === "R";
+  const inGroup = (group: unknown): boolean => isRecord(group) && Array.isArray(group.questions) && group.questions.some(isRanking);
+  if (kind === "question") return isRanking(spec);
+  if (kind === "group") return inGroup(spec);
+  return isRecord(spec) && Array.isArray(spec.groups) && spec.groups.some(inGroup);
+}
+
 /** Python truthiness for the values a JSON spec can hold. */
 export function truthy(value: unknown): boolean {
   if (value === null || value === undefined || value === false || value === 0 || value === "") return false;
@@ -289,22 +298,21 @@ export function normalizeSurveySpec(spec: unknown): NormalSpec {
     expires: normalizeExpires(asString(surveyIn.expires)),
   };
 
-  const groups: NormalGroup[] = [];
-  for (const group of Array.isArray(root.groups) ? root.groups : []) {
-    const groupIn = isRecord(group) ? group : {};
-    const questions: NormalQuestion[] = [];
-    for (const question of Array.isArray(groupIn.questions) ? groupIn.questions : []) {
-      questions.push(normalizeQuestion(question, languages));
-    }
-    groups.push({
-      title: expandText(groupIn.title, languages),
-      description: expandText(groupIn.description, languages),
-      relevance: asString(groupIn.relevance) || "1",
-      randomization_group: asString(groupIn.randomization_group),
-      questions,
-    });
-  }
+  const groups = (Array.isArray(root.groups) ? root.groups : []).map((group) => normalizeGroup(group, languages));
   return { survey, languages, groups };
+}
+
+/** One group of a spec (kind group, or an entry of groups), normalized for the given survey languages. */
+export function normalizeGroup(group: unknown, languages: readonly string[]): NormalGroup {
+  const groupIn = isRecord(group) ? group : {};
+  const questions = (Array.isArray(groupIn.questions) ? groupIn.questions : []).map((question) => normalizeQuestion(question, languages));
+  return {
+    title: expandText(groupIn.title, languages),
+    description: expandText(groupIn.description, languages),
+    relevance: asString(groupIn.relevance) || "1",
+    randomization_group: asString(groupIn.randomization_group),
+    questions,
+  };
 }
 
 export function normalizeQuestion(question: unknown, languages: readonly string[]): NormalQuestion {

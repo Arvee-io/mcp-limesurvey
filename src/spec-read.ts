@@ -563,6 +563,124 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
   };
 }
 
+/** A main question of a survey outline. */
+export interface OutlineQuestion {
+  question_id: number;
+  code: string;
+  order: number;
+}
+
+/** A group of a survey outline, with its main questions in their order. */
+export interface OutlineGroup {
+  group_id: number;
+  order: number;
+  /** The name in the base language ("" when the group has no text row there). */
+  name: string;
+  questions: OutlineQuestion[];
+}
+
+/**
+ * A text without a row in an additional language, with what it belongs to: a group (group_id), a question (question_code,
+ * question_id) or a subquestion (its question's code and id plus subquestion_code).
+ */
+export interface TranslationGap extends MissingTranslation {
+  group_id?: number;
+  question_code?: string;
+  question_id?: number;
+  subquestion_code?: string;
+}
+
+/** What the add tools need of a survey before they write: structure, codes and ids, and (on request) the translation gaps. */
+export interface SurveyOutline {
+  languages: string[];
+  /** undefined when get_survey_properties does not report it. */
+  active: boolean | undefined;
+  /** In the order of the survey: groups by (group_order, name, gid), questions by (question_order, code). */
+  groups: OutlineGroup[];
+  /** The codes of all main questions of the survey. */
+  questionCodes: string[];
+  /** Every question id (main questions and subquestions) and every group id of the survey. */
+  questionIds: Set<number>;
+  groupIds: Set<number>;
+  /**
+   * With options.gaps: the group, question and subquestion texts that have a row in the base language but none in an
+   * additional language (paths of the whole survey). fixLanguageConsistency fills exactly these from the base language.
+   */
+  gaps: TranslationGap[];
+}
+
+const byGroupOrder = (a: Row, b: Row): number => (
+  num(a.group_order) - num(b.group_order) || compareText(str(a.group_name), str(b.group_name)) || num(a.gid) - num(b.gid)
+);
+const byQuestionOrder = (a: Row, b: Row): number => num(a.question_order) - num(b.question_order) || compareText(str(a.title), str(b.title));
+const bySubquestionOrder = (a: Row, b: Row): number => num(a.scale_id) - num(b.scale_id) || byQuestionOrder(a, b);
+
+/** Reads the outline of a survey with get_survey_properties, list_groups and list_questions only. */
+export async function readSurveyOutline(client: RpcClient, surveyId: number, options: { gaps?: boolean } = {}): Promise<SurveyOutline> {
+  const properties = asRow(await client.call("get_survey_properties", [surveyId, ["language", "additional_languages", "active"]])) ?? {};
+  const base = str(properties.language) || "de";
+  const languages = [base, ...splitLanguages(properties.additional_languages).filter((language) => language !== base)];
+  const active = properties.active === "Y" ? true : properties.active === "N" ? false : undefined;
+  const listed = options.gaps === true ? languages : [base];
+  const groupLists = await mapLimit(listed, PARALLEL_READS, async (language) => rowsOf(await client.call("list_groups", [surveyId, language])));
+  const questionLists = await mapLimit(listed, PARALLEL_READS, async (language) => (
+    rowsOf(await client.call("list_questions", [surveyId, null, language]))
+  ));
+  const baseGroups = [...(groupLists[0] ?? [])].sort(byGroupOrder);
+  const baseQuestions = questionLists[0] ?? [];
+  const mains = baseQuestions.filter(isMainQuestion);
+  const mainsOf = (gid: string): Row[] => mains.filter((row) => str(row.gid) === gid).sort(byQuestionOrder);
+
+  const gaps: TranslationGap[] = [];
+  if (options.gaps === true) {
+    const groupsIn = listed.map((_language, index) => new Map((groupLists[index] ?? []).map((row) => [str(row.gid), row] as const)));
+    const questionsIn = listed.map((_language, index) => new Map((questionLists[index] ?? []).map((row) => [str(row.qid), row] as const)));
+    const hasText = (row: Row | undefined, field: string): boolean => row !== undefined && row[field] !== null && row[field] !== undefined;
+    /** The additional languages that lack the row of the element, when the base language has it. */
+    const lacking = (maps: Array<Map<string, Row>>, id: string, field: string): string[] => (
+      hasText(maps[0]?.get(id), field) ? languages.filter((_language, index) => index > 0 && !hasText(maps[index]?.get(id), field)) : []
+    );
+    baseGroups.forEach((groupRow, groupIndex) => {
+      const gid = str(groupRow.gid);
+      const group_id = num(groupRow.gid);
+      for (const language of lacking(groupsIn, gid, "group_name")) {
+        gaps.push({ path: `groups[${groupIndex}].title`, language, group_id }, { path: `groups[${groupIndex}].description`, language, group_id });
+      }
+      mainsOf(gid).forEach((questionRow, questionIndex) => {
+        const qid = str(questionRow.qid);
+        const owner = { question_code: str(questionRow.title), question_id: num(questionRow.qid) };
+        const path = `groups[${groupIndex}].questions[${questionIndex}]`;
+        for (const language of lacking(questionsIn, qid, "question")) {
+          gaps.push({ path: `${path}.text`, language, ...owner }, { path: `${path}.help`, language, ...owner });
+        }
+        const subs = baseQuestions.filter((row) => !isMainQuestion(row) && str(row.parent_qid) === qid).sort(bySubquestionOrder);
+        // LimeSurvey 7 stores the entries of a Ranking question as subquestions; the spec calls them answers.
+        const list = str(questionRow.type) === "R" ? "answers" : "subquestions";
+        subs.forEach((sub, subIndex) => {
+          for (const language of lacking(questionsIn, str(sub.qid), "question")) {
+            gaps.push({ path: `${path}.${list}[${subIndex}].text`, language, ...owner, subquestion_code: str(sub.title) });
+          }
+        });
+      });
+    });
+  }
+
+  return {
+    languages,
+    active,
+    groups: baseGroups.map((row) => ({
+      group_id: num(row.gid),
+      order: num(row.group_order),
+      name: str(row.group_name),
+      questions: mainsOf(str(row.gid)).map((question) => ({ question_id: num(question.qid), code: str(question.title), order: num(question.question_order) })),
+    })),
+    questionCodes: mains.map((row) => str(row.title)),
+    questionIds: new Set(baseQuestions.map((row) => num(row.qid))),
+    groupIds: new Set(baseGroups.map((row) => num(row.gid))),
+    gaps,
+  };
+}
+
 /** What validate_spec needs of a live survey: its languages, groups and the codes of its main questions. */
 export interface SurveyContext {
   languages: string[];
