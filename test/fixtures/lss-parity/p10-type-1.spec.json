@@ -1,0 +1,43 @@
+{
+  "survey": {
+    "title": {
+      "de": "Wichtigkeit und Zufriedenheit",
+      "en": "Importance and satisfaction"
+    },
+    "language": "de",
+    "additional_languages": ["en"]
+  },
+  "groups": [
+    {
+      "title": {
+        "de": "Bewertung",
+        "en": "Rating"
+      },
+      "questions": [
+        {
+          "code": "D01",
+          "type": "1",
+          "text": {
+            "de": "Wie wichtig ist Ihnen das, und wie zufrieden sind Sie damit?",
+            "en": "How important is this to you, and how satisfied are you with it?"
+          },
+          "subquestions": [
+            { "code": "SQ001", "text": { "de": "Preis", "en": "Price" } },
+            { "code": "SQ002", "text": { "de": "Beratung", "en": "Advice" } }
+          ],
+          "answers": [
+            { "code": "1", "text": { "de": "unwichtig", "en": "unimportant" }, "assessment_value": 1 },
+            { "code": "2", "text": { "de": "wichtig", "en": "important" }, "assessment_value": 2 },
+            { "code": "1", "text": { "de": "unzufrieden", "en": "dissatisfied" }, "assessment_value": 1, "scale_id": 1 },
+            { "code": "2", "text": { "de": "teils/teils", "en": "partly" }, "assessment_value": 2, "scale_id": 1 },
+            { "code": "3", "text": { "de": "zufrieden", "en": "satisfied" }, "assessment_value": 3, "scale_id": 1 }
+          ],
+          "attributes": {
+            "dualscale_headerA": { "de": "Wichtigkeit", "en": "Importance" },
+            "dualscale_headerB": { "de": "Zufriedenheit", "en": "Satisfaction" }
+          }
+        }
+      ]
+    }
+  ]
+}

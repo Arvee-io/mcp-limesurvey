@@ -1,0 +1,27 @@
+{
+  "survey": {
+    "title": "Arbeitszeit"
+  },
+  "groups": [
+    {
+      "title": "Woche",
+      "questions": [
+        {
+          "code": "N01",
+          "type": ":",
+          "text": "Wie viele Stunden arbeiten Sie an diesen Tagen?",
+          "subquestions": [
+            { "code": "SQ001", "text": "Montag" },
+            { "code": "SQ002", "text": "Dienstag" },
+            { "code": "SQ003", "text": "Mittwoch" },
+            { "code": "SQ001", "text": "vormittags", "scale_id": 1 },
+            { "code": "SQ002", "text": "nachmittags", "scale_id": 1 }
+          ],
+          "attributes": {
+            "multiflexible_max": "12"
+          }
+        }
+      ]
+    }
+  ]
+}
