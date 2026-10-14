@@ -456,7 +456,10 @@ test("[GEN-D] a question without a text row in one language is no error: the map
     const question = result.spec.groups[0].questions[0];
     assert.equal(question.code, "S01");
     assert.deepEqual(question.text, { de: "Wie zufrieden waren Sie?" });
-    assert.deepEqual(result.missing_translations, [{ path: "groups[0].questions[0].text", language: "en" }]);
+    // Every field of the missing row is a missing translation: the text and the help (and a script, when there is one).
+    const missing = result.missing_translations as Array<{ path: string; language: string }>;
+    assert.ok(missing.some((item) => item.path === "groups[0].questions[0].text" && item.language === "en"), JSON.stringify(missing));
+    assert.ok(missing.every((item) => item.language === "en" && /^groups\[0\]\.questions\[0\]\.(text|help|script)$/.test(item.path)), JSON.stringify(missing));
     assert.deepEqual(question.answers.map((answer: Json) => answer.code), ["1", "2"], "the answers stay in the spec");
     assert.deepEqual(result.languages, ["de", "en"]);
   }, { fake });

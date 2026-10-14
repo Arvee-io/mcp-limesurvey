@@ -52,6 +52,10 @@ export interface SeedQuestion {
   other?: boolean;
   relevance?: string;
   same_default?: boolean;
+  same_script?: boolean;
+  encrypted?: boolean;
+  preg?: string;
+  modulename?: string;
   answers?: SeedAnswer[];
   subquestions?: SeedSubquestion[];
   attributes?: SeedAttribute[];
@@ -62,6 +66,7 @@ export interface SeedGroup {
   title: Texts;
   description?: Texts;
   relevance?: string;
+  randomization_group?: string;
   questions: SeedQuestion[];
 }
 
@@ -131,7 +136,7 @@ export function seedSurvey(fake: FakeLimeSurvey, seed: SeedSurvey): SeededSurvey
       gid,
       sid,
       group_order: groupIndex,
-      randomization_group: "",
+      randomization_group: groupSeed.randomization_group ?? "",
       grelevance: groupSeed.relevance ?? "1",
       l10n: Object.fromEntries(languages.map((language) => [language, {
         group_name: groupSeed.title[language] ?? "",
@@ -159,17 +164,17 @@ export function seedSurvey(fake: FakeLimeSurvey, seed: SeedSurvey): SeededSurvey
         gid,
         type: questionSeed.type,
         title: questionSeed.code,
-        preg: "",
+        preg: questionSeed.preg ?? "",
         other: questionSeed.other === true ? "Y" : "N",
         mandatory: questionSeed.mandatory ?? "N",
-        encrypted: "N",
+        encrypted: questionSeed.encrypted === true ? "Y" : "N",
         question_order: questionIndex + 1,
         scale_id: 0,
         same_default: questionSeed.same_default === true ? "1" : "0",
         relevance: questionSeed.relevance ?? "1",
         question_theme_name: questionSeed.theme ?? BASE_THEME_BY_TYPE[questionSeed.type] ?? "",
-        modulename: "",
-        same_script: "0",
+        modulename: questionSeed.modulename ?? "",
+        same_script: questionSeed.same_script === true ? "1" : "0",
         l10n: l10n(questionSeed.text, questionSeed.help, questionSeed.script),
       });
 
