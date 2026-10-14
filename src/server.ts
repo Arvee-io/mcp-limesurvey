@@ -58,7 +58,7 @@ function textResult(result: LimeSurveyToolResult, format: ResponseFormat): strin
   return `## ${result.method}\n\n${markdownValue(result.result)}${suffix}${warnings}`;
 }
 
-export const SERVER_VERSION = "1.5.1";
+export const SERVER_VERSION = "1.6.0";
 
 export function createServer(
   config: LimeSurveyConfig,

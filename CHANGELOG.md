@@ -7,6 +7,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-14
+
+Surveys, groups and single questions can now be created, read and changed from
+a JSON description, without any local file; 82 tools (75 before).
+
 ### Added
 
 - Surveys from a JSON description (spec), without any local file:
@@ -521,6 +526,7 @@ changes are based on user feedback.
 - JSON-RPC 1.0 client with session reuse, retry, timeouts, structured MCP output,
   Zod validation, annotations, stdio transport, and mocked endpoint tests.
 
+[1.6.0]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.5.1...v1.6.0
 [1.4.0]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.3.1...v1.4.0
 [1.3.0]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/Wagner-Emden-IT-Services/limesurvey-mcp-server/compare/v1.2.2...v1.2.3
