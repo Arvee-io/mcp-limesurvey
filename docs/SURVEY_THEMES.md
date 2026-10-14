@@ -111,17 +111,27 @@ Tool: `limesurvey_validate_survey_theme`
 }
 ```
 
-Continue only when `valid=true`: LimeSurvey imports and uses the package. The
-result includes `installed_theme_name`, derived from the file name. The rules
-follow the import code of LimeSurvey 7.5.1 with its default upload lists.
+`valid=true` means LimeSurvey imports and uses the package. Continue only when
+`valid=true` and after reviewing every `policy:` warning: JavaScript, `@import`,
+and external or data URLs in CSS are served to every participant. The result
+includes `installed_theme_name`, derived from the file name. The rules follow
+the import code of LimeSurvey 7.5.1 with its default upload lists.
 
 Errors (`valid=false`) are limited to archive safety and real import
 obstacles:
 
-- unsafe ZIP paths (path traversal, absolute paths) and the size limits for
-  the archive and each entry;
+- more than 1000 entries, unsafe ZIP paths (path traversal, absolute paths),
+  and the size limits for the archive and each entry. These checks use the ZIP
+  metadata only; on such a finding the validator stops before it decompresses
+  anything, so the result lists only these errors;
+- an entry that grows beyond the size limit while it is decompressed, or whose
+  content does not match the CRC-32 checksum of the archive (entries are read
+  one at a time);
 - image and font content that does not match the extension (PNG, JPEG, GIF,
-  ICO, WOFF2, WOFF, TTF, OTF; EOT has no signature to check);
+  ICO, WOFF2, WOFF, TTF, OTF; only the first bytes count, EOT has no signature
+  to check);
+- a `config.xml` that is not well-formed XML, for example an unescaped `&` in
+  the title;
 - an installed name longer than 45 characters, or with characters other than
   ASCII letters, digits, `_`, and `-` (LimeSurvey rejects or changes
   `#$%^&*()+=[]';,./{}|:<>?~`);
@@ -142,15 +152,17 @@ files anywhere, `gif` and `ico` images, and subfolders in `css/` and `files/`.
 Warnings starting with `policy:` mark what LimeSurvey accepts but the generator
 never produces. They do not affect `valid`; review them before the import:
 
-- JavaScript, source maps, JSON, XML other than `config.xml`, survey exports,
-  and files without an extension;
+- JavaScript, source maps, JSON, XML other than `config.xml`, Twig templates
+  (generated themes inherit every layout from `vanilla`), survey exports, and
+  files without an extension;
 - a missing `css/mcp-theme.css` or `LICENSE.txt`, a license other than the GNU
   General Public License, and more than 50 entries;
 - `@import`, JavaScript expressions, and embedded or external URLs in any CSS
   file (participants' browsers load what they reference), and CSS files over
   200,000 characters;
-- missing responsive small-screen rules, checked in `css/mcp-theme.css` or, when
-  it is missing, in all CSS files together;
+- missing responsive small-screen rules, reduced-motion handling, or visible
+  keyboard focus, checked in `css/mcp-theme.css` or, when it is missing, in all
+  CSS files together;
 - a parent other than `vanilla` (it must be installed on the target instance),
   or no parent but an `engine` section (a standalone theme; the validator does
   not check that `views/` holds every template);
@@ -222,15 +234,29 @@ Tool: `limesurvey_assign_survey_theme`
 when it keeps another theme: a theme that is not installed under this name, not
 readable for the RemoteControl account, or incompatible is silently replaced by
 the previous or the default theme. The tool therefore reads the `template`
-property back. A match returns `verified: true`; a different value fails with
-`THEME_NOT_APPLIED`, naming the requested and the stored theme. If only the
-read-back fails, the tool answers `THEME_NOT_VERIFIED` with `written: true`:
-check the template in the admin interface or with
-`limesurvey_get_survey_properties` instead of repeating the call. The value
-`inherit` is refused; choose **Inherit** as the theme in the survey's general
-settings in the admin interface instead. Then open the survey as a participant
-in every configured language. Assign it to a production survey only after
-review.
+property before and after the change:
+
+- It first reads the current theme as `previous_theme`. If that fails, it writes
+  nothing and answers `THEME_PREVIOUS_UNKNOWN` (`written: false`): check the
+  survey in the admin interface and retry.
+- A matching read-back returns `verified: true`, `previous_theme`, and
+  `changed` (whether the survey now uses another theme than before).
+- A different value fails with `THEME_NOT_APPLIED`, naming the requested and the
+  stored theme, `previous_theme`, and `changed`. If LimeSurvey answers
+  `{"template": false}`, it refused to save the survey (validation). When the
+  survey changed anyway, the recovery says how to restore `previous_theme`.
+- If only the read-back fails or has no template, the tool answers
+  `THEME_NOT_VERIFIED` with `written: true`: check the template in the admin
+  interface or with `limesurvey_get_survey_properties` instead of repeating the
+  call.
+
+The value `inherit` is refused: the read-back would only confirm the stored
+value `inherit`, not the theme the survey group passes on. Choose **Inherit** as
+the theme in the survey's general settings in the admin interface, or call
+`limesurvey_set_survey_properties` with `{"template": "inherit"}`; the rollback
+text names this way when `previous_theme` is `inherit`. Then open the survey as
+a participant in every configured language. Assign it to a production survey
+only after review.
 
 ## Acceptance and rollback
 
@@ -244,8 +270,10 @@ At minimum, test:
 - reduced motion and print output;
 - privacy, token, quota, and completion pages.
 
-Record the previous theme name before deployment. LimeSurvey does not overwrite
-an installed theme with a new upload; a new version is a new package with its
-own installed name (mind versions with the same digits, see
-[Installed theme name](#installed-theme-name)). Roll back by assigning the previous installed theme with
-`limesurvey_assign_survey_theme`; the new package does not need to be deleted.
+Record the previous theme name before deployment; `limesurvey_assign_survey_theme`
+returns it as `previous_theme`. LimeSurvey does not overwrite an installed theme
+with a new upload; a new version is a new package with its own installed name
+(mind versions with the same digits, see
+[Installed theme name](#installed-theme-name)). Roll back by assigning the
+previous installed theme with `limesurvey_assign_survey_theme` (for `inherit`,
+see above); the new package does not need to be deleted.

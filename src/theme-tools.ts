@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { XMLParser } from "fast-xml-parser";
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 import JSZip from "jszip";
 import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
@@ -155,7 +155,7 @@ function decodeLogo(base64: string, type: "png" | "jpeg", maxBytes: number): Buf
   }
   const valid = type === "png"
     ? buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-    : buffer[0] === 0xff && buffer[1] === 0xd8 && buffer.at(-2) === 0xff && buffer.at(-1) === 0xd9;
+    : isJpeg(buffer);
   if (!valid) throw new LimeSurveyError(`The logo content does not match logo_file_type=${type}.`);
   return buffer;
 }
@@ -165,8 +165,9 @@ function startsWith(buffer: Buffer, signature: string | number[]): boolean {
   return buffer.subarray(0, expected.length).equals(expected);
 }
 
-const isJpeg = (buffer: Buffer): boolean =>
-  buffer[0] === 0xff && buffer[1] === 0xd8 && buffer.at(-2) === 0xff && buffer.at(-1) === 0xd9;
+// Start of image plus the first marker. The end-of-image marker is not checked: encoders and editors may append
+// padding or metadata after it.
+const isJpeg = (buffer: Buffer): boolean => startsWith(buffer, [0xff, 0xd8, 0xff]);
 // TrueType and OpenType share the sfnt container; either extension may hold TrueType (0x00010000, "true") or
 // CFF ("OTTO") outlines.
 const isSfnt = (buffer: Buffer): boolean =>
@@ -195,10 +196,79 @@ const limeSurveyThemeExtensions = new Set([
 ]);
 
 // The file types of the generator's own policy. LimeSurvey also imports the rest of its list (JavaScript, source maps,
-// JSON, XML, survey exports) and files without an extension; those only give a "policy:" warning.
+// JSON, XML, Twig templates, survey exports) and files without an extension; those only give a "policy:" warning.
+// The generator ships no Twig templates: generated themes inherit every layout from vanilla.
 const policyThemeExtensions = new Set([
-  "css", "twig", "txt", "md", "png", "jpg", "jpeg", "gif", "ico", "woff2", "woff", "ttf", "otf", "eot",
+  "css", "txt", "md", "png", "jpg", "jpeg", "gif", "ico", "woff2", "woff", "ttf", "otf", "eot",
 ]);
+
+// Upper bound for the number of archive entries the validator looks at; the policy warning starts at 50.
+const maxThemeEntries = 1000;
+
+const crc32Table = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) crc = (crc >>> 8) ^ (crc32Table[(crc ^ byte) & 0xff] ?? 0);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Size and CRC-32 as the ZIP central directory declares them (JSZip keeps them on the entry). */
+function entryMetadata(entry: JSZip.JSZipObject): { uncompressedSize: number; crc32: number | undefined } {
+  const internal = entry as unknown as { _data?: { uncompressedSize?: number; crc32?: number } };
+  return { uncompressedSize: internal._data?.uncompressedSize ?? 0, crc32: internal._data?.crc32 };
+}
+
+/**
+ * Decompresses one entry as a stream and stops once it exceeds maxBytes, so an entry whose declared size is wrong
+ * cannot fill the memory. The content must match the CRC-32 the archive declares.
+ */
+async function readEntry(
+  entry: JSZip.JSZipObject,
+  maxBytes: number,
+): Promise<{ content: Buffer; error?: undefined } | { content?: undefined; error: string }> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let exceeded = false;
+  try {
+    // JSZip's node stream is not async-iterable; its events are.
+    const stream = entry.nodeStream("nodebuffer");
+    await new Promise<void>((resolve, reject) => {
+      stream.on("data", (chunk: Buffer | string) => {
+        if (exceeded) return;
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        total += bytes.length;
+        if (total > maxBytes) {
+          exceeded = true;
+          stream.pause();
+          resolve();
+          return;
+        }
+        chunks.push(bytes);
+      });
+      stream.on("end", () => resolve());
+      stream.on("error", (error: Error) => reject(error));
+    });
+  } catch (value) {
+    return { error: `Theme entry cannot be decompressed (${value instanceof Error ? value.message : String(value)}): ${entry.name}` };
+  }
+  if (exceeded) return { error: `Theme entry exceeds LIMESURVEY_MAX_THEME_ASSET_BYTES when decompressed: ${entry.name}` };
+  const content = Buffer.concat(chunks);
+  const expected = entryMetadata(entry).crc32;
+  // JSZip keeps the declared CRC-32 as a signed 32-bit integer.
+  if (expected !== undefined && crc32(content) !== expected >>> 0) {
+    return { error: `Theme entry does not match its CRC-32 checksum; the archive is damaged: ${entry.name}` };
+  }
+  return { content };
+}
 
 /** The extension as PHP's pathinfo() reports it: the text after the last dot of the base name, undefined without one. */
 function fileExtension(entryName: string): string | undefined {
@@ -420,7 +490,9 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
   if (archive.byteLength > maxAssetBytes * 3 + 1024 * 1024) {
     throw new LimeSurveyError("The compressed theme package is larger than the configured validation limit.");
   }
-  const zip = await JSZip.loadAsync(archive, { checkCRC32: true });
+  // Loading reads the central directory only. checkCRC32 would decompress every entry at once, before the size checks
+  // below; readEntry checks the CRC-32 of each entry it reads instead.
+  const zip = await JSZip.loadAsync(archive);
   const entries = Object.values(zip.files);
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -438,38 +510,64 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
         + "ZIP such a name, validate it again, and upload it under that name.",
     );
   }
-  let totalUncompressedBytes = 0;
-  if (entries.length > 50) {
-    warnings.push(`policy: the package has ${entries.length} entries; generated packages stay at 50 entries or fewer. LimeSurvey has no such limit.`);
+  let metadata: Record<string, JsonValue> = {};
+  const report = (): JsonValue => ({
+    valid: errors.length === 0,
+    file_name: fileName,
+    installed_theme_name: installedName,
+    path: target,
+    entries: entries.filter((entry) => !entry.dir).slice(0, maxThemeEntries).map((entry) => entry.name),
+    metadata,
+    errors,
+    warnings,
+    sha256: createHash("sha256").update(archive).digest("hex"),
+  });
+
+  // Archive safety from the ZIP metadata alone. Any finding ends the validation before an entry is decompressed.
+  if (entries.length > maxThemeEntries) {
+    errors.push(`The package has ${entries.length} entries; the validator reads at most ${maxThemeEntries}.`);
+    return report();
   }
+  let unsafeArchive = false;
+  let totalUncompressedBytes = 0;
   for (const entry of entries) {
     const original = entry.unsafeOriginalName ?? entry.name;
     if (original.startsWith("/") || original.includes("\\") || original.split("/").includes("..")) {
       errors.push(`Unsafe archive path: ${original}`);
+      unsafeArchive = true;
     }
-    if (!entry.dir && entry.name !== "config.xml") {
-      const extension = fileExtension(entry.name);
-      if (skippedByLimeSurvey(entry)) {
-        errors.push(
-          `LimeSurvey skips ${entry.name} on import (.${extension} is not an allowed theme file type), so the import `
-            + "ends as a partial import without it. Remove the file.",
-        );
-      } else if (extension === undefined || !policyThemeExtensions.has(extension)) {
-        warnings.push(
-          `policy: ${entry.name} (${extension === undefined ? "no extension" : `.${extension}`}) is outside the `
-            + "generator's file set; LimeSurvey imports it. Review it before the import, because theme files are "
-            + "served to every participant.",
-        );
-      }
-    }
-    const internal = entry as unknown as { _data?: { uncompressedSize?: number } };
-    const uncompressedSize = internal._data?.uncompressedSize ?? 0;
+    const { uncompressedSize } = entryMetadata(entry);
     totalUncompressedBytes += uncompressedSize;
     if (!entry.dir && uncompressedSize > maxAssetBytes) {
       errors.push(`Theme entry exceeds LIMESURVEY_MAX_THEME_ASSET_BYTES: ${entry.name}`);
+      unsafeArchive = true;
     }
   }
-  if (totalUncompressedBytes > maxAssetBytes * 3) errors.push("The uncompressed theme package exceeds the configured limit.");
+  if (totalUncompressedBytes > maxAssetBytes * 3) {
+    errors.push("The uncompressed theme package exceeds the configured limit.");
+    unsafeArchive = true;
+  }
+  if (unsafeArchive) return report();
+
+  if (entries.length > 50) {
+    warnings.push(`policy: the package has ${entries.length} entries; generated packages stay at 50 entries or fewer. LimeSurvey has no such limit.`);
+  }
+  for (const entry of entries) {
+    if (entry.dir || entry.name === "config.xml") continue;
+    const extension = fileExtension(entry.name);
+    if (skippedByLimeSurvey(entry)) {
+      errors.push(
+        `LimeSurvey skips ${entry.name} on import (.${extension} is not an allowed theme file type), so the import `
+          + "ends as a partial import without it. Remove the file.",
+      );
+    } else if (extension === undefined || !policyThemeExtensions.has(extension)) {
+      warnings.push(
+        `policy: ${entry.name} (${extension === undefined ? "no extension" : `.${extension}`}) is outside the `
+          + "generator's file set; LimeSurvey imports it. Review it before the import, because theme files are "
+          + "served to every participant.",
+      );
+    }
+  }
   const configEntry = zip.file("config.xml");
   const cssEntry = zip.file("css/mcp-theme.css");
   const licenseEntry = zip.file("LICENSE.txt");
@@ -487,9 +585,18 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
     );
   }
 
-  let metadata: Record<string, JsonValue> = {};
-  if (configEntry) {
-    const xml = await configEntry.async("string");
+  const manifestRead = configEntry ? await readEntry(configEntry, maxAssetBytes) : undefined;
+  const xml = manifestRead?.content?.toString("utf8");
+  if (manifestRead?.error !== undefined) errors.push(manifestRead.error);
+  // LimeSurvey reads config.xml with SimpleXML, which refuses XML that is not well-formed.
+  const wellFormed = xml === undefined ? true : XMLValidator.validate(xml);
+  if (wellFormed !== true) {
+    errors.push(
+      `config.xml is not well-formed XML (line ${wellFormed.err.line}): ${wellFormed.err.msg} LimeSurvey cannot read `
+        + "such a manifest; escape & and < in texts as &amp; and &lt;.",
+    );
+  }
+  if (xml !== undefined && wellFormed === true) {
     try {
       const parsed = new XMLParser({ ignoreAttributes: false, trimValues: true }).parse(xml) as {
         config?: { metadata?: Record<string, unknown>; compatibility?: { version?: string | string[] }; engine?: unknown };
@@ -578,15 +685,17 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
       errors.push(`config.xml cannot be parsed: ${value instanceof Error ? value.message : String(value)}`);
     }
   }
-  // The CSS rules are the generator's policy: LimeSurvey loads every CSS file as it is.
-  const cssTexts: string[] = [];
-  let mainCss: string | undefined;
+  // The CSS rules are the generator's policy: LimeSurvey serves every CSS file unchanged. Each file is read and checked
+  // on its own; only the findings are kept. The style rules count in css/mcp-theme.css, or in any CSS file when it is
+  // missing.
+  const styles = { smallScreen: false, reducedMotion: false, focus: false };
   for (const entry of entries.filter((item) => !item.dir && fileExtension(item.name) === "css")) {
-    const internal = entry as unknown as { _data?: { uncompressedSize?: number } };
-    if ((internal._data?.uncompressedSize ?? 0) > maxAssetBytes) continue;
-    const css = await entry.async("string");
-    cssTexts.push(css);
-    if (entry.name === "css/mcp-theme.css") mainCss = css;
+    const read = await readEntry(entry, maxAssetBytes);
+    if (read.error !== undefined) {
+      errors.push(read.error);
+      continue;
+    }
+    const css = read.content.toString("utf8");
     if (css.length > 200_000) warnings.push(`policy: ${entry.name} exceeds 200,000 characters.`);
     if (/@import\b|javascript\s*:|expression\s*\(|url\s*\(\s*['"]?(?:https?:|\/\/|data:)/i.test(css)) {
       warnings.push(
@@ -594,37 +703,40 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
           + "LimeSurvey serves it unchanged, so every participant's browser loads what it references. Review it.",
       );
     }
+    if (!cssEntry || entry.name === "css/mcp-theme.css") {
+      styles.smallScreen ||= css.includes("@media (max-width: 575.98px)");
+      styles.reducedMotion ||= css.includes("prefers-reduced-motion");
+      styles.focus ||= css.includes(":focus-visible");
+    }
   }
-  // The style checks look at css/mcp-theme.css, or at all CSS files together when it is missing.
-  const styles = cssEntry ? (mainCss ?? "") : cssTexts.join("\n");
   const styleScope = cssEntry ? "css/mcp-theme.css" : "the CSS files";
-  if (!styles.includes("@media (max-width: 575.98px)")) {
+  if (!styles.smallScreen) {
     warnings.push(`policy: responsive small-screen rules (@media (max-width: 575.98px)) are missing in ${styleScope}.`);
   }
-  if (!styles.includes("prefers-reduced-motion")) warnings.push("Reduced-motion handling is missing.");
-  if (!styles.includes(":focus-visible")) warnings.push("Visible keyboard focus styling is missing.");
+  if (!styles.reducedMotion) {
+    warnings.push(`policy: reduced-motion handling (prefers-reduced-motion) is missing in ${styleScope}.`);
+  }
+  if (!styles.focus) warnings.push(`policy: visible keyboard focus styling (:focus-visible) is missing in ${styleScope}.`);
   for (const entry of entries.filter((item) => !item.dir)) {
     const signature = contentSignatures[fileExtension(entry.name) ?? ""];
-    const internal = entry as unknown as { _data?: { uncompressedSize?: number } };
-    if (signature && (internal._data?.uncompressedSize ?? 0) <= maxAssetBytes) {
-      const content = await entry.async("nodebuffer");
-      if (!signature.matches(content)) errors.push(`${signature.kind} content does not match its extension: ${entry.name}`);
-    }
+    if (!signature) continue;
+    const read = await readEntry(entry, maxAssetBytes);
+    if (read.error !== undefined) errors.push(read.error);
+    else if (!signature.matches(read.content)) errors.push(`${signature.kind} content does not match its extension: ${entry.name}`);
   }
   if (!entries.some((entry) => /^files\/logo\.(png|jpe?g)$/.test(entry.name))) {
     warnings.push("No logo is bundled. This is valid; the parent theme or a later Theme Options upload can provide one.");
   }
-  return {
-    valid: errors.length === 0,
-    file_name: fileName,
-    installed_theme_name: installedName,
-    path: target,
-    entries: entries.filter((entry) => !entry.dir).map((entry) => entry.name),
-    metadata,
-    errors,
-    warnings,
-    sha256: createHash("sha256").update(archive).digest("hex"),
-  };
+  return report();
+}
+
+/** How to put back the theme a survey used before; this tool refuses inherit, set_survey_properties takes it. */
+function restoreInstruction(previousTheme: string): string {
+  return previousTheme === "inherit"
+    ? "To restore the previous state (the survey inherited its theme from its survey group), call "
+      + "limesurvey_set_survey_properties with data {\"template\": \"inherit\"}, or choose Inherit as the theme in the "
+      + "survey's general settings in the admin interface."
+    : `To restore the previous state, assign previous_theme ${previousTheme} again with this tool.`;
 }
 
 function objectValue(value: JsonValue): Record<string, JsonValue> | undefined {
@@ -762,17 +874,22 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       const fileName = `${input.theme_name}-${input.theme_version}-ls${input.target_limesurvey_major}.zip`;
       const installedName = installedThemeName(fileName);
       if (installedName.length > maxInstalledThemeNameLength) {
-        const maxThemeName = maxInstalledThemeNameLength - (installedName.length - input.theme_name.length);
+        const suffixLength = installedName.length - input.theme_name.length;
+        const maxThemeName = maxInstalledThemeNameLength - suffixLength;
+        // theme_name has at least 3 characters; below that only a shorter theme_version helps.
+        const recovery = maxThemeName >= 3
+          ? `Shorten theme_name to at most ${maxThemeName} characters, or shorten theme_version.`
+          : `Shorten theme_version: with it the installed name needs ${suffixLength} characters besides theme_name.`;
         throw new LimeSurveyError(
           `LimeSurvey would install this package as ${installedName} (${installedName.length} characters), but it allows `
-            + `at most ${maxInstalledThemeNameLength} and stops the import after extracting the files. Use a theme_name of `
-            + `at most ${maxThemeName} characters for theme_version ${input.theme_version}. Nothing was written.`,
+            + `at most ${maxInstalledThemeNameLength} and stops the import after extracting the files. ${recovery} `
+            + "Nothing was written.",
           "THEME_NAME_TOO_LONG",
           {
             installed_theme_name: installedName,
             length: installedName.length,
             max_length: maxInstalledThemeNameLength,
-            recovery: `Use a theme_name of at most ${maxThemeName} characters.`,
+            recovery,
           },
         );
       }
@@ -870,13 +987,14 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     {
       title: "Validate a generated LimeSurvey survey theme",
       description: "Validate a ZIP inside LIMESURVEY_THEME_DIR against the LimeSurvey 7.5.1 import: valid=true means "
-        + "LimeSurvey imports and uses the package. errors cover archive safety (unsafe paths, size limits, content "
-        + "signatures of images and fonts) and real import obstacles (installed name from the ZIP file name over 45 "
-        + "characters or with other characters, files the import would silently skip, a missing metadata/title or "
-        + "views/ directory, config.xml not at the root). Warnings starting with \"policy:\" mark what LimeSurvey "
-        + "accepts but the generator does not produce, for example JavaScript, a parent other than vanilla, a missing "
-        + "css/mcp-theme.css, LICENSE.txt or GPL license, more than 50 entries, or external URLs in CSS. Returns "
-        + "installed_theme_name.",
+        + "LimeSurvey imports and uses the package. errors cover archive safety (more than 1000 entries, unsafe paths, "
+        + "size limits, CRC-32 mismatches, content signatures of images and fonts; the archive checks stop before "
+        + "anything is decompressed) and real import obstacles (installed name from the ZIP file name over 45 "
+        + "characters or with other characters, files the import would silently skip, a config.xml that is not "
+        + "well-formed or not at the root, a missing metadata/title or views/ directory). Warnings starting with "
+        + "\"policy:\" mark what LimeSurvey accepts but the generator does not produce, for example JavaScript, Twig "
+        + "templates, a parent other than vanilla, a missing css/mcp-theme.css, LICENSE.txt or GPL license, more than 50 "
+        + "entries, or external URLs in CSS; review them before the import. Returns installed_theme_name.",
       inputSchema: strictInput({ file_name: z.string().min(5) }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -908,7 +1026,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         : "unsupported";
       const installedName = installedThemeName(input.package_file_name);
       const steps: JsonValue[] = [
-        "Run limesurvey_validate_survey_theme and continue only when valid=true.",
+        "Run limesurvey_validate_survey_theme and continue only when valid=true after reviewing every policy: warning (JavaScript, @import, and external or data URLs in CSS are served to every participant).",
         `Confirm that the installed LimeSurvey version is ${input.installed_limesurvey_version} and that the generated package targets major version ${major}.`,
         "Sign in with a trusted account that has the global Templates import permission. Theme import can execute presentation code and must not be delegated broadly.",
         "Open Configuration > Advanced > Themes and select the Survey themes section.",
@@ -936,6 +1054,8 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         installed_theme_name: installedName,
         current_reference: {
           checked_on: "2026-10-14",
+          // Kept for existing consumers: the release of the last check, not necessarily the newest one.
+          current_ce_release: "7.5.1",
           tested_ce_release: "7.5.1",
           tested_steps: "import through Upload & install, installed name, assignment with read-back, rendering",
           earlier_checks: [{ checked_on: "2026-07-22", current_ce_release: "7.0.5" }],
@@ -950,6 +1070,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         steps,
         stop_conditions: [
           "Validation reports errors.",
+          "A policy: warning is not reviewed, in particular JavaScript, @import, or external or data URLs in CSS.",
           "The installed major version does not match the package compatibility entry.",
           "vanilla is unavailable.",
           "The preview has inaccessible contrast, hidden focus, clipped content, or broken question layouts.",
@@ -963,18 +1084,21 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     "limesurvey_assign_survey_theme",
     {
       title: "Assign an installed theme to a survey",
-      description: "Assign an already imported LimeSurvey survey theme through set_survey_properties, then read the "
-        + "template back with get_survey_properties. theme_name is the installed name (for a generated package its "
-        + "installed_theme_name, such as acme_feedback-100-ls7). LimeSurvey answers {\"template\": true} even when it "
-        + "keeps another theme; a different read-back value fails with THEME_NOT_APPLIED, a failed read-back with "
-        + "THEME_NOT_VERIFIED (written: true). inherit is refused; set inheritance in the admin interface. This does "
-        + "not upload or install the theme package.",
+      description: "Assign an already imported LimeSurvey survey theme: read the current template (previous_theme), set "
+        + "the new one through set_survey_properties, and read it back with get_survey_properties. theme_name is the "
+        + "installed name (for a generated package its installed_theme_name, such as acme_feedback-100-ls7). LimeSurvey "
+        + "answers {\"template\": true} even when it keeps another theme; a different read-back value, or a refused "
+        + "save ({\"template\": false}), fails with THEME_NOT_APPLIED; a failed or empty read-back with "
+        + "THEME_NOT_VERIFIED (written: true); an unreadable previous theme with THEME_PREVIOUS_UNKNOWN (written: "
+        + "false). Results and THEME_NOT_APPLIED name previous_theme and changed. inherit is refused; set it with "
+        + "limesurvey_set_survey_properties or in the admin interface. This does not upload or install the theme package.",
       inputSchema: strictInput({
         survey_id: z.number().int().positive(),
-        // "inherit" makes the survey take the theme of its survey group; the read-back cannot confirm that.
         theme_name: installedThemeNameSchema.refine((name) => name !== "inherit", {
-          message: "inherit is not accepted: choose Inherit as the theme in the survey's general settings in the "
-            + "LimeSurvey admin interface, or assign an installed theme name.",
+          message: "inherit is not accepted: the read-back would only confirm the stored value inherit, not the theme "
+            + "the survey group passes on. Choose Inherit as the theme in the survey's general settings in the "
+            + "LimeSurvey admin interface, use limesurvey_set_survey_properties with data {\"template\": \"inherit\"}, "
+            + "or assign an installed theme name.",
         }),
         confirm_theme_assignment: z.literal(true).describe("Required acknowledgement that the survey appearance will change."),
       }),
@@ -982,58 +1106,95 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ survey_id, theme_name }) => run(config, "assign_survey_theme", async () => {
-      const rpcResult = await client.call("set_survey_properties", [survey_id, { template: theme_name }]);
-      // set_survey_properties reports the save() result per field. LimeSurvey replaces a theme that is not installed,
-      // not readable for the account, or not valid with the default theme (Survey.php:573, :626-643;
-      // Template::templateNameFilter, Template.php:166-220) and still answers true; reading applies the same filter,
-      // so the read-back shows the theme the survey really uses (Survey.php:613-615).
-      let readBackValue: JsonValue;
+      // Read the current template first; without it a failed assignment could not be undone.
+      let previous: JsonValue | undefined;
+      let previousError: ReturnType<typeof describeError> | undefined;
       try {
-        readBackValue = await client.call("get_survey_properties", [survey_id, ["template"]]);
+        previous = objectValue(await client.call("get_survey_properties", [survey_id, ["template"]]))?.template;
       } catch (value) {
-        const cause = describeError(value);
+        previousError = describeError(value);
+      }
+      if (typeof previous !== "string") {
         throw new LimeSurveyError(
-          `Theme ${theme_name} was sent to survey ${survey_id}, but reading the template back failed: ${cause.message}`,
+          `The current theme of survey ${survey_id} could not be read${previousError ? `: ${previousError.message}` : "."} `
+            + "Nothing was written.",
+          "THEME_PREVIOUS_UNKNOWN",
+          {
+            survey_id,
+            requested_theme: theme_name,
+            written: false,
+            ...(previousError?.code !== undefined ? { cause_code: previousError.code } : {}),
+            recovery: "Check the survey in the admin interface (it must exist and be readable for this account) and retry.",
+          },
+        );
+      }
+      const previousTheme = previous;
+      const rpcResult = await client.call("set_survey_properties", [survey_id, { template: theme_name }]);
+      // set_survey_properties reports the save() result per field: false when the survey fails validation. LimeSurvey
+      // replaces a theme that is not installed, not readable for the account, or not valid with the previous or the
+      // default theme (Survey.php:573, :626-643; Template::templateNameFilter, Template.php:166-220) and still answers
+      // true; reading applies the same filter, so the read-back shows the theme the survey really uses
+      // (Survey.php:613-615).
+      const refused = objectValue(rpcResult)?.template === false;
+      let stored: JsonValue | undefined;
+      let readError: ReturnType<typeof describeError> | undefined;
+      try {
+        stored = objectValue(await client.call("get_survey_properties", [survey_id, ["template"]]))?.template;
+      } catch (value) {
+        readError = describeError(value);
+      }
+      if (typeof stored !== "string") {
+        throw new LimeSurveyError(
+          `Theme ${theme_name} was sent to survey ${survey_id}, but the template could not be read back`
+            + `${readError ? `: ${readError.message}` : " (the answer has no template)."}`,
           "THEME_NOT_VERIFIED",
           {
             survey_id,
             requested_theme: theme_name,
-            written: true,
+            previous_theme: previousTheme,
+            written: !refused,
             rpc_result: rpcResult,
-            ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
+            ...(readError?.code !== undefined ? { cause_code: readError.code } : {}),
             recovery: "Do not repeat the assignment blindly: check the template in the admin interface or call "
               + "limesurvey_get_survey_properties with the property template.",
           },
         );
       }
-      const readBack = objectValue(readBackValue);
-      const stored = readBack?.template ?? null;
+      const changed = stored !== previousTheme;
       if (stored !== theme_name) {
-        throw new LimeSurveyError(
-          `LimeSurvey did not apply theme ${theme_name} to survey ${survey_id}: the survey uses ${JSON.stringify(stored)}. `
-            + "Possible causes: no theme with this installed name (a generated package is installed under its "
+        const cause = refused
+          ? "LimeSurvey refused to save the survey (validation): set_survey_properties answered {\"template\": false}."
+          : "Possible causes: no theme with this installed name (a generated package is installed under its "
             + "installed_theme_name, for example acme_feedback-100-ls7), the RemoteControl account lacks the Templates "
-            + "permission for it, or the theme is incompatible or broken; LimeSurvey then silently keeps the previous or "
-            + "the default theme.",
+            + "permission for it, or the theme is incompatible or broken; LimeSurvey then silently keeps the previous "
+            + "or the default theme.";
+        throw new LimeSurveyError(
+          `LimeSurvey did not apply theme ${theme_name} to survey ${survey_id}: the survey uses ${stored}`
+            + `${changed ? ` instead of ${previousTheme}` : ""}. ${cause}`,
           "THEME_NOT_APPLIED",
           {
             survey_id,
             requested_theme: theme_name,
             stored_theme: stored,
+            previous_theme: previousTheme,
+            changed,
             rpc_result: rpcResult,
-            recovery: "Find the installed name with limesurvey_list_installed_themes or in the theme list "
-              + "(Configuration > Advanced > Themes) and assign that name.",
+            recovery: `${changed ? `${restoreInstruction(previousTheme)} ` : ""}Take the installed name from the theme `
+              + "list (Configuration > Advanced > Themes) or from installed_theme_name of "
+              + "limesurvey_generate_survey_theme or limesurvey_validate_survey_theme, and assign that name.",
           },
         );
       }
       return {
         survey_id,
         theme_name,
+        previous_theme: previousTheme,
+        changed,
         rpc_result: rpcResult,
         verified: true,
         verification: "The template read back with get_survey_properties matches theme_name. Preview the survey in "
           + "every language before activation.",
-        rollback: "Assign the previous installed theme name with this same tool.",
+        rollback: restoreInstruction(previousTheme),
       };
     }),
   );

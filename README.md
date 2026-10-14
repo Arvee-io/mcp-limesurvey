@@ -647,15 +647,19 @@ never produces (for example JavaScript, another parent theme, a missing
 Recommended tool sequence:
 
 1. `limesurvey_generate_survey_theme`
-2. `limesurvey_validate_survey_theme`; continue only with `valid=true`
+2. `limesurvey_validate_survey_theme`; continue only with `valid=true` after
+   reviewing every `policy:` warning (JavaScript, `@import`, and external or
+   data URLs in CSS are served to every participant)
 3. `limesurvey_get_theme_publication_guide` using the installed version shown in LimeSurvey
 4. Import the unrenamed ZIP with **Upload & install** in the theme list under
    **Configuration > Advanced > Themes > Survey themes**
 5. Test an inactive survey on phone, tablet, desktop, keyboard, zoom, RTL, and print
 6. `limesurvey_assign_survey_theme` with `installed_theme_name` and
-   `confirm_theme_assignment=true`; it reads the template back and fails with
+   `confirm_theme_assignment=true`; it reads the current theme first
+   (`previous_theme`), reads the template back, and fails with
    `THEME_NOT_APPLIED` when LimeSurvey kept another theme (`THEME_NOT_VERIFIED`
-   when only the read-back fails)
+   when only the read-back fails, `THEME_PREVIOUS_UNKNOWN` without writing when
+   the current theme cannot be read)
 
 See [Survey Theme Guide](docs/SURVEY_THEMES.md) for complete examples,
 acceptance criteria, Cloud restrictions, community publication, and rollback.
