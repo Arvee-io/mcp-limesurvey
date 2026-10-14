@@ -58,6 +58,16 @@ export interface SpecContext {
    * allowed and reported as a warning.
    */
   rankingGeneration?: 6 | 7;
+  /**
+   * Embedded data URIs are not reported (limesurvey_update_question_from_spec reports them as the risk data_uri, because
+   * an unchanged text of the question may hold one).
+   */
+  allowDataUri?: boolean;
+  /**
+   * Paths of language maps that may name only some of the languages (texts of an existing question that have no row in
+   * a language: an unchanged translation gap), for example text or subquestions[0].text.
+   */
+  subsetPaths?: ReadonlySet<string>;
 }
 
 export type SpecSummary = { groups?: number; questions?: number; subquestions?: number; answers?: number; type?: string };
@@ -71,7 +81,8 @@ export interface SpecValidation {
 
 /** Characters XML 1.0 cannot store: control characters, the non-characters U+FFFE and U+FFFF and unpaired surrogates. */
 const XML_FORBIDDEN_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF￾￿]/u;
-const DATA_URI_SOURCE = /src\s*=\s*["']?\s*data:/i;
+/** An image embedded as a data URI, which LimeSurvey removes from a text whenever it saves the row. */
+export const DATA_URI_SOURCE = /src\s*=\s*["']?\s*data:/i;
 const TEXT_FIX = "Give one string (it is used for every language of the survey) or a map per language such as {\"de\": \"...\", \"en\": \"...\"}.";
 
 const keyPath = (base: string, name: string): string => (base === "" ? name : `${base}.${name}`);
@@ -134,6 +145,8 @@ interface Scope {
   languages: readonly string[] | undefined;
   /** The LimeSurvey generation of the target instance when it is known; it decides what a Ranking entry may have. */
   generation: 6 | 7 | undefined;
+  /** Map paths that may name only some of the languages (SpecContext.subsetPaths). */
+  subsetPaths: ReadonlySet<string>;
   counters: { groups: number; questions: number; subquestions: number; answers: number };
 }
 
@@ -206,7 +219,7 @@ function checkLanguageMap(findings: Findings, path: string, map: Record<string, 
       );
     }
   }
-  if (options.subset) return;
+  if (options.subset || scope.subsetPaths.has(path)) return;
   const missing = languages.filter((language) => !keys.includes(language));
   if (missing.length > 0) {
     findings.error(
@@ -680,8 +693,8 @@ function validateGroup(findings: Findings, group: unknown, path: string, scope: 
   questions.forEach((question, index) => validateQuestion(findings, question, indexPath(questionsPath, index), scope));
 }
 
-/** Every string of the spec: XML 1.0 control characters and embedded data URIs. */
-function checkStrings(findings: Findings, value: unknown, path: string): void {
+/** Every string of the spec: XML 1.0 control characters and (unless allowed) embedded data URIs. */
+function checkStrings(findings: Findings, value: unknown, path: string, allowDataUri: boolean): void {
   if (typeof value === "string") {
     const forbidden = XML_FORBIDDEN_CHARACTER.exec(value);
     if (forbidden) {
@@ -692,7 +705,7 @@ function checkStrings(findings: Findings, value: unknown, path: string): void {
         "Remove the character (copy the text again without hidden control characters).",
       );
     }
-    if (DATA_URI_SOURCE.test(value)) {
+    if (!allowDataUri && DATA_URI_SOURCE.test(value)) {
       findings.error(
         path,
         'The text embeds an image as a data URI (src="data:...") which LimeSurvey removes when it saves the text.',
@@ -700,9 +713,9 @@ function checkStrings(findings: Findings, value: unknown, path: string): void {
       );
     }
   } else if (Array.isArray(value)) {
-    value.forEach((item, index) => checkStrings(findings, item, indexPath(path, index)));
+    value.forEach((item, index) => checkStrings(findings, item, indexPath(path, index), allowDataUri));
   } else if (isRecord(value)) {
-    for (const [name, item] of Object.entries(value)) checkStrings(findings, item, keyPath(path, name));
+    for (const [name, item] of Object.entries(value)) checkStrings(findings, item, keyPath(path, name), allowDataUri);
   }
 }
 
@@ -714,6 +727,7 @@ export function validateSpec(kind: SpecKind, spec: unknown, context: SpecContext
     existingCodes: new Set((context.existingQuestionCodes ?? []).map((code) => code.toLowerCase())),
     languages: kind === "survey" ? (isRecord(unescaped) ? languagesOfSurveySpec(unescaped.survey) : undefined) : context.languages,
     generation: context.rankingGeneration,
+    subsetPaths: context.subsetPaths ?? new Set(),
     counters: { groups: 0, questions: 0, subquestions: 0, answers: 0 },
   };
 
@@ -735,7 +749,7 @@ export function validateSpec(kind: SpecKind, spec: unknown, context: SpecContext
   } else {
     validateQuestion(findings, unescaped, "", scope);
   }
-  checkStrings(findings, unescaped, "");
+  checkStrings(findings, unescaped, "", context.allowDataUri === true);
 
   const { counters } = scope;
   let summary: SpecSummary;

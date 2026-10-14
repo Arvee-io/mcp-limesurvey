@@ -11,6 +11,7 @@ import { limeSurveyGeneration } from "./limesurvey-generation.js";
 import { generateSurveyLss, specInvalidError } from "./spec-generate.js";
 import { hasRankingQuestion, isRecord, normalizeSurveySpec, unescapeStrings } from "./spec-model.js";
 import { readSurveyContext, readSurveySpec, type ReadScope } from "./spec-read.js";
+import { UPDATE_ACKNOWLEDGEMENTS, updateQuestionFromSpec, updateSurveyTexts } from "./spec-update.js";
 import { validateSpec, type SpecFinding, type SpecWarning } from "./spec-validate.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, requiredWriteScope } from "./write-scope.js";
@@ -590,6 +591,151 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         input,
         (scoped) => addGroupFromSpec({ rpc: scoped, client, config, created }, input),
         { writeMethods: ["import_group", "set_group_properties"], created },
+      );
+    },
+  );
+
+  server.registerTool(
+    "limesurvey_update_question_from_spec",
+    {
+      title: "Change a question to a described end state",
+      description: "Change one existing question to the end state given as a question spec (typically the spec of "
+        + "limesurvey_get_survey_spec at level question, changed). The tool compares the end state with the question and "
+        + "picks the mode: none (nothing differs, nothing is written); texts (only question, help and subquestion texts: "
+        + "written in place with set_question_properties questionl10ns, also at an active survey); columns (code, mandatory, "
+        + "relevance, preg, other, same_default, same_script, encrypted, question_theme_name, modulename, inactive survey "
+        + "only: written in place, the question ID stays); replace (anything else: subquestions, answers and answer texts, "
+        + "attributes, defaults, type, script; inactive survey only): the end state is imported as a new question, moved to "
+        + "the place of the old one and read back completely; only if it matches is the old question deleted, otherwise "
+        + "the new one is deleted again and the old one keeps everything. Texts the end state does not change are written "
+        + "back as LimeSurvey stores them. dry_run true only reads (write scope none) and returns { survey_id, question_id, "
+        + "survey_active, mode (none, texts, columns, replace, or rejected when an active survey would need more than "
+        + "texts), changes [{ path, kind (text, column, structure), current, desired }], changes_total, risks [{ code, "
+        + "blocking, acknowledgeable, detail, locations }], plan, fingerprint }. The real run needs expected_fingerprint "
+        + "(of get_survey_spec or the dry run; STALE_SPEC if the question changed since) and confirm_destructive_action "
+        + "true, and returns the same plus applied, verification { ok, differences } and, after a replacement, the new "
+        + "question_id and old_question_id. Blocking risks stop the call with UPDATE_QUESTION_BLOCKED before anything is "
+        + "written: qid_bound_links (every replacement: URL parameters, archived responses, quota memberships of the old "
+        + "ID), quota_members, other_default, removals, translation_gaps (import_question fills missing translations of the "
+        + "survey; acknowledge fill_translation_gaps) and answer_code_references can be acknowledged; code_references, "
+        + "sgqa_references and data_uri cannot. Errors: SPEC_INVALID, STALE_SPEC, SURVEY_ACTIVE (with the changes that need "
+        + "an inactive survey), UPDATE_QUESTION_BLOCKED, QUESTION_SURVEY_MISMATCH, REPLACE_QUESTION_FAILED (failed_step, "
+        + "rolled_back, manual_cleanup, differences), UPDATE_QUESTION_FAILED (texts and columns, with the old values "
+        + "written back). Texts of the survey, groups and questions alone go with limesurvey_update_survey_texts; a new "
+        + "question with limesurvey_add_question_from_spec. Needs the write scope content (dry run: none).",
+      inputSchema: strictInput({
+        survey_id: surveyId,
+        question_id: z.number().int().positive().describe("ID of the main question of this survey to change."),
+        question: questionSpecSchema.describe(
+          "The end state of the question as a question spec, for example the spec of limesurvey_get_survey_spec at level question, changed.",
+        ),
+        dry_run: z.boolean().optional().describe("true: only show mode, changes, risks and plan; nothing is written (default false)."),
+        expected_fingerprint: z.string().min(1).optional().describe(
+          "The fingerprint of the question as read (limesurvey_get_survey_spec or a dry run); required unless dry_run is true.",
+        ),
+        acknowledge: z.array(z.enum(UPDATE_ACKNOWLEDGEMENTS)).optional().describe(
+          "Confirmed risks of the dry run: qid_bound_links, quota_members, other_default, removals, fill_translation_gaps "
+          + "(for the risk translation_gaps) and answer_code_references.",
+        ),
+        confirm_destructive_action: z.literal(true).optional().describe(
+          "Must be true for a real run (dry_run not true): a replacement deletes the old question.",
+        ),
+      }).superRefine((value, context) => {
+        if (value.dry_run === true) return;
+        if (value.confirm_destructive_action !== true) {
+          context.addIssue({
+            code: "custom",
+            path: ["confirm_destructive_action"],
+            message: "confirm_destructive_action must be true for a real run (or set dry_run to true).",
+          });
+        }
+        if (value.expected_fingerprint === undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["expected_fingerprint"],
+            message: "expected_fingerprint (from limesurvey_get_survey_spec or a dry run) is required for a real run.",
+          });
+        }
+      }),
+      outputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => {
+      const created: CreatedIds = { surveyId: input.survey_id, questions: new Set(), groups: new Set() };
+      return runScoped(
+        config,
+        client,
+        "update_question_from_spec",
+        input,
+        (scoped) => updateQuestionFromSpec({ rpc: scoped, client, config, created }, input),
+        { writeMethods: ["import_question", "set_question_properties"], created },
+      );
+    },
+  );
+
+  const textValue = z.union([z.string(), z.record(z.string(), z.string())]).describe(
+    "One string for every language of the survey, or a map with some of its languages such as {\"en\": \"...\"}.",
+  );
+  server.registerTool(
+    "limesurvey_update_survey_texts",
+    {
+      title: "Change texts of a survey",
+      description: "Change texts of a survey by code, also at an active survey: survey title, description, welcometext and "
+        + "endtext (set_language_properties per language), group title and description by group_id (set_group_properties "
+        + "with questiongroupl10ns) and question, help and subquestion texts by question code (set_question_properties with "
+        + "questionl10ns on the question or subquestion). Every text is one string for every survey language or a map with "
+        + "some of them. Before anything is written the tool refuses: answers or attributes in texts (TEXT_NOT_WRITABLE: "
+        + "RemoteControl cannot write them; at an inactive survey use limesurvey_update_question_from_spec), an unknown "
+        + "code or a language the survey lacks (SPEC_INVALID with the path), a group of another survey "
+        + "(GROUP_SURVEY_MISMATCH), a row that holds an embedded data URI in any field, which LimeSurvey would remove on "
+        + "saving (DATA_URI_PRESENT), and an expected_fingerprint that does not match (STALE_SPEC). Returns { survey_id, "
+        + "survey_active, changes [{ path, language, current, desired }], changes_total, applied, verification { ok, "
+        + "differences }, side_effects (for example empty mail templates LimeSurvey fills on saving), collateral_changes "
+        + "(other fields of the saved rows that changed), fingerprint }. dry_run true only reads (write scope none) and "
+        + "shows the changes; its fingerprint can be passed as expected_fingerprint. If a write fails, every text the call "
+        + "wrote is reset (TEXT_UPDATE_FAILED with rolled_back). Needs the write scope content (dry run: none).",
+      inputSchema: strictInput({
+        survey_id: surveyId,
+        texts: z.strictObject({
+          survey: z.strictObject({
+            title: textValue.optional(),
+            description: textValue.optional(),
+            welcometext: textValue.optional(),
+            endtext: textValue.optional(),
+          }).optional().describe("Texts of the survey."),
+          groups: z.array(z.strictObject({
+            group_id: z.number().int().positive().describe("ID of a group of this survey."),
+            title: textValue.optional(),
+            description: textValue.optional(),
+          })).optional().describe("Texts of groups, by group_id."),
+          questions: z.array(z.strictObject({
+            code: z.string().min(1).describe("Code of a main question of this survey."),
+            text: textValue.optional(),
+            help: textValue.optional(),
+            subquestions: z.array(z.strictObject({
+              code: z.string().min(1).describe("Code of a subquestion of this question."),
+              scale_id: z.union([z.literal(0), z.literal(1)]).optional().describe("Scale of the subquestion when the code exists on both."),
+              text: textValue,
+            })).optional().describe("Texts of subquestions, by code."),
+            answers: z.unknown().optional().describe("Not writable by RemoteControl: refused with TEXT_NOT_WRITABLE."),
+            attributes: z.unknown().optional().describe("Not writable by RemoteControl: refused with TEXT_NOT_WRITABLE."),
+          })).optional().describe("Texts of questions, by code."),
+        }).describe("The texts to set."),
+        dry_run: z.boolean().optional().describe("true: only show the changes; nothing is written (default false)."),
+        expected_fingerprint: z.string().min(1).optional().describe("The fingerprint of a dry run: the call stops with STALE_SPEC if a text changed since."),
+      }),
+      outputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async (input) => {
+      const created: CreatedIds = { surveyId: input.survey_id, questions: new Set(), groups: new Set() };
+      return runScoped(
+        config,
+        client,
+        "update_survey_texts",
+        input,
+        (scoped) => updateSurveyTexts({ rpc: scoped, client, config, created }, input),
+        { writeMethods: ["set_language_properties", "set_group_properties", "set_question_properties"] },
       );
     },
   );

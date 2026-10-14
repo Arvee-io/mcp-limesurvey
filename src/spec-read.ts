@@ -30,7 +30,7 @@ export const SPEC_QUESTION_PROPERTIES: readonly string[] = Object.freeze([
   "question", "help", "script", "attributes", "attributes_lang", "answeroptions", "answeroptions_multiscale",
 ]);
 
-const PARALLEL_READS = 4;
+export const PARALLEL_READS = 4;
 
 export interface MissingTranslation {
   path: string;
@@ -67,6 +67,11 @@ export interface SpecRead {
    * the paths of missing_translations and unreadable are those of the whole survey (groups[1].questions[0].text).
    */
   spec: ComparableSpec;
+  /**
+   * The same structure as spec with the texts, scripts and attribute values as LimeSurvey stores them (CRLF and entities
+   * kept): what a write puts back for a text it does not change.
+   */
+  raw: ComparableSpec;
   /** Texts that have no row in a language (the question text itself, not what hangs on it). */
   missing_translations: MissingTranslation[];
   /** Answer texts and language-dependent attributes that cannot be read because the question has no text row in the language. */
@@ -110,7 +115,7 @@ function yesNo(value: JsonValue | undefined, fallback: boolean): boolean | "inhe
 }
 
 /** Runs fn over the items with at most `limit` calls at a time; the results keep the order of the items. */
-async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -557,6 +562,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
     languages,
     active: properties.active === "Y",
     spec: normalizeSpec({ survey, groups }, languages),
+    raw: normalizeSpec({ survey, groups }, languages, { raw: true }),
     missing_translations: missing,
     unreadable,
     layout,

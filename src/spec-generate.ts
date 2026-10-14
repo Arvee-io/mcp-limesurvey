@@ -327,6 +327,11 @@ const PLACEHOLDER_FIELD_NAME = /0X9\d{8}X9\d{8}/;
 export interface StructureFileOptions extends GenerateOptions {
   /** The languages of the target survey, base language first: the file names exactly these. */
   languages: readonly string[];
+  /**
+   * Write the texts as given instead of entity-decoded (the decoded spec is still what is validated). For a replacement
+   * whose unchanged texts carry the values LimeSurvey stores (design 9.24).
+   */
+  raw?: boolean;
 }
 
 const placeholderIds = (): IdCounters => ({ qid: PLACEHOLDER_ID, aid: PLACEHOLDER_ID, dvid: PLACEHOLDER_ID, ql10n: 1, al10n: 1, dl10n: 1 });
@@ -388,7 +393,7 @@ export function generateQuestionLsq(spec: unknown, options: StructureFileOptions
   const decoded = checkedSpec("question", spec, options);
   const languages = options.languages;
   const rows = emptyQuestionRows();
-  addQuestionRows(rows, placeholderIds(), normalizeQuestion(decoded, languages), {
+  addQuestionRows(rows, placeholderIds(), normalizeQuestion(options.raw === true ? spec : decoded, languages), {
     sid: DEFAULT_SID, gid: PLACEHOLDER_ID, questionOrder: 1, languages, ranking: options.ranking ?? "answers",
   });
   return writeQuestionSections(structureWriter("Question", languages), rows);
