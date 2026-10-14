@@ -17,7 +17,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **78 MCP tools:** official methods plus focused workflow, survey description, and theme tools
+- **80 MCP tools:** official methods plus focused workflow, survey description, and theme tools
 - **Surveys from a description:** validate a JSON survey description, create the survey from it,
   and read any survey, group, or question back as such a description, without any local file
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
@@ -36,9 +36,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
 | Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation, survey-vs-.lss verification, question replacement | 14 |
-| Survey descriptions (spec) | Validate a description, read a survey, group, or question as a description, create a survey from it | 3 |
+| Survey descriptions (spec) | Validate a description, read a survey, group, or question as a description, create a survey, insert a question or a group at a given position | 5 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **78** |
+| **Total** | | **80** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -231,11 +231,11 @@ around a block by calling the RemoteControl API directly.
 | Write scope | Tools |
 |---|---|
 | `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`, `limesurvey_validate_spec`, `limesurvey_get_survey_spec`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_verify_survey_against_lss`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
-| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question`, `limesurvey_create_survey_from_spec` |
+| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question`, `limesurvey_create_survey_from_spec`, `limesurvey_add_question_from_spec`, `limesurvey_add_group_from_spec` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 78 tools are listed (43 + 16 + 7 + 12). A tool that is missing from the
+All 80 tools are listed (43 + 18 + 7 + 12). A tool that is missing from the
 server's scope table is treated as `outreach`. Two calls are argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
@@ -405,6 +405,8 @@ path, which keeps them usable from remote MCP clients.
 | `limesurvey_validate_spec` | `none` | Checks a survey, group, or question description and reports every problem at once with `path` (for example `groups[1].questions[3].answers[0].code`), `message`, and `fix`. With `survey_id` it also reads the target survey (read methods only) and checks codes and languages against it. |
 | `limesurvey_get_survey_spec` | `none` | Reads a survey, one group (`group_id`), or one question (`question_id`) as a description in the format the write tools take, with `ids`, `position`, a `fingerprint`, `unreadable` (what RemoteControl cannot read), and `missing_translations`. |
 | `limesurvey_create_survey_from_spec` | `content` | Validates the description before any request, generates the `.lss` in memory, imports it with `import_survey`, reads the new survey back, and reports `verification { ok, differences, differences_total, truncated }`. |
+| `limesurvey_add_question_from_spec` | `content` | Inserts one question into a group of an inactive survey at `position` (1-based index, `{ "before": "<code>" }` or `{ "after": "<code>" }`; default: at the end), then reads it back and compares it with the description. |
+| `limesurvey_add_group_from_spec` | `content` | Inserts one group with its questions into an inactive survey at `position` (1-based index, `{ "before": <group_id> }` or `{ "after": <group_id> }`; default: at the end), then reads it back and compares it. |
 
 ### Spec format
 
@@ -509,6 +511,23 @@ survey language. When the result would exceed
 `LIMESURVEY_MAX_RESPONSE_CHARS`, the tool answers `SPEC_TOO_LARGE` with an
 outline (`group_id`, title, number of questions, estimated size) to read group
 by group.
+
+### Adding a question or a group
+
+`limesurvey_add_question_from_spec` and `limesurvey_add_group_from_spec` take the
+description of one question or one group, in the same format as inside a survey
+spec (a `spec` from `limesurvey_get_survey_spec` works unchanged). They check it
+against the live survey first: texts in exactly the survey languages, codes that
+are free in the survey without regard to case (`CODE_CONFLICT` otherwise, because
+LimeSurvey would rename them silently), an inactive survey (`SURVEY_ACTIVE`),
+the group of the survey (`GROUP_SURVEY_MISMATCH`), and a valid position
+(`POSITION_INVALID`); none of these errors writes anything. LimeSurvey imports a
+question or group at the end; the tools then move only the new element to its
+place, so the other questions and groups keep their order values. If a step after
+the import fails, the new element is deleted again and the error reports
+`failed_step`, `rolled_back`, and `manual_cleanup`. When LimeSurvey fills a
+missing translation of another question from the base language during the
+import, the result lists it under `side_effects`.
 
 ### Verification
 

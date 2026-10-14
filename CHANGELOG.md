@@ -27,6 +27,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `missing_translations`; too large surveys give `SPEC_TOO_LARGE` with an outline
   per group. Surveys built in the admin UI read back with their extended question
   themes, non-default attributes, default values and scripts.
+- `limesurvey_add_question_from_spec` and `limesurvey_add_group_from_spec` (write
+  scope `content`) insert one question or one group with its questions into an
+  inactive survey at a given position, without a file. Only the new element is
+  moved; the result is read back and compared; a failure after the import deletes
+  the new element again.
 - Texts per language: every text field of a spec takes a string or a map per
   language; new structure must cover exactly the survey languages.
   Language-dependent attributes are written once per language.
