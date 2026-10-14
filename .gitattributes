@@ -1,0 +1,2 @@
+# Byte-exact fixtures: the parity test compares generated .lss files byte for byte.
+test/fixtures/lss-parity/** -text

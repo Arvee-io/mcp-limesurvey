@@ -1,0 +1,95 @@
+{
+  "survey": {
+    "title": "Kundenbefragung „Service“ 2026",
+    "language": "de",
+    "additional_languages": [
+      "en"
+    ],
+    "description": "<p>Ihre Meinung zählt &ndash; wirklich.</p>",
+    "welcometext": "<p>Willkommen!</p>",
+    "endtext": "<p>Danke! ]]> Ende</p>",
+    "anonymized": true,
+    "datestamp": true,
+    "ipaddr": true,
+    "savetimings": true,
+    "format": "A",
+    "adminemail": "umfragen@example.org",
+    "showprogress": false,
+    "expires": "2026-12-31",
+    "template": "vanilla",
+    "showqnumcode": "B"
+  },
+  "groups": [
+    {
+      "title": "Service",
+      "description": "Fragen zum Service",
+      "questions": [
+        {
+          "code": "S01",
+          "type": "L",
+          "text": "Wie zufrieden waren Sie?",
+          "mandatory": true,
+          "other": true,
+          "attributes": {
+            "display_columns": 2,
+            "answer_order": "random"
+          },
+          "answers": [
+            {
+              "code": "1",
+              "text": "gar nicht",
+              "assessment_value": -1
+            },
+            {
+              "code": "2",
+              "text": "sehr",
+              "assessment_value": 3
+            }
+          ]
+        },
+        {
+          "code": "S02",
+          "type": "M",
+          "text": "Was hat Ihnen gefallen?",
+          "relevance": "S01.NAOK > 1 && !is_empty(S01)",
+          "attributes": {
+            "min_answers": 1,
+            "max_answers": 2
+          },
+          "subquestions": [
+            {
+              "code": "Q1",
+              "text": "Tempo"
+            },
+            {
+              "code": "Q2",
+              "text": "Freundlichkeit <b>!</b>"
+            }
+          ]
+        },
+        {
+          "code": "S03",
+          "type": "N",
+          "text": "Wie viele Kontakte?",
+          "help": "Nur Zahlen",
+          "attributes": {
+            "min_num_value_n": 0,
+            "max_num_value_n": 99
+          }
+        }
+      ]
+    },
+    {
+      "title": "Abschluss",
+      "relevance": "S03 >= 1",
+      "questions": [
+        {
+          "code": "T01",
+          "type": "T",
+          "text": "Möchten Sie noch etwas sagen?",
+          "mandatory": false
+        }
+      ]
+    }
+  ]
+}

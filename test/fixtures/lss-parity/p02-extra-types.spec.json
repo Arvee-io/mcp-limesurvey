@@ -1,0 +1,168 @@
+{
+  "survey": {
+    "title": "Weitere Fragetypen",
+    "language": "de"
+  },
+  "groups": [
+    {
+      "title": "Zahlen und Matrizen",
+      "description": "Typen mit Unterfragen",
+      "questions": [
+        {
+          "code": "K01",
+          "type": "K",
+          "text": "Wie viele Stunden pro Woche entfallen auf die Bereiche?",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Beratung"
+            },
+            {
+              "code": "SQ002",
+              "text": "Verwaltung"
+            }
+          ],
+          "attributes": {
+            "slider_layout": "1",
+            "slider_min": "0",
+            "slider_max": "40"
+          }
+        },
+        {
+          "code": "B01",
+          "type": "B",
+          "text": "Matrix 10 Punkte",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Zeile eins"
+            },
+            {
+              "code": "SQ002",
+              "text": "Zeile zwei"
+            }
+          ]
+        },
+        {
+          "code": "C01",
+          "type": "C",
+          "text": "Matrix Ja/Unsicher/Nein",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Zeile eins"
+            },
+            {
+              "code": "SQ002",
+              "text": "Zeile zwei"
+            }
+          ]
+        },
+        {
+          "code": "E01",
+          "type": "E",
+          "text": "Matrix Mehr/Gleich/Weniger",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Zeile eins"
+            },
+            {
+              "code": "SQ002",
+              "text": "Zeile zwei"
+            }
+          ]
+        },
+        {
+          "code": "H01",
+          "type": "H",
+          "text": "Matrix nach Spalten",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Zeile eins"
+            },
+            {
+              "code": "SQ002",
+              "text": "Zeile zwei"
+            }
+          ],
+          "answers": [
+            {
+              "code": "A1",
+              "text": "niedrig"
+            },
+            {
+              "code": "A2",
+              "text": "hoch"
+            }
+          ]
+        },
+        {
+          "code": "P01",
+          "type": "P",
+          "text": "Mehrfachauswahl mit Kommentar",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Zeile eins"
+            },
+            {
+              "code": "SQ002",
+              "text": "Zeile zwei"
+            }
+          ],
+          "other": true
+        }
+      ]
+    },
+    {
+      "title": "Einzelwerte",
+      "relevance": "K01_SQ001 > 0",
+      "questions": [
+        {
+          "code": "D01",
+          "type": "D",
+          "text": "Datum",
+          "attributes": {
+            "date_format": "dd.mm.yyyy"
+          }
+        },
+        {
+          "code": "G01",
+          "type": "G",
+          "text": "Geschlecht"
+        },
+        {
+          "code": "U01",
+          "type": "U",
+          "text": "Langer Text",
+          "help": "Bitte ausführlich."
+        },
+        {
+          "code": "I01",
+          "type": "I",
+          "text": "Sprachwechsel"
+        },
+        {
+          "code": "EQ01",
+          "type": "*",
+          "text": "Gleichung",
+          "attributes": {
+            "equation": "{K01_SQ001 * 2}",
+            "hidden": "1"
+          }
+        },
+        {
+          "code": "F01",
+          "type": "|",
+          "text": "Datei-Upload",
+          "attributes": {
+            "max_num_of_files": 2,
+            "allowed_filetypes": "pdf, png"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "spec": "p01-plugin-example.spec.json",
+      "lss": "p01-plugin-example.lss",
+      "types": [
+        "X",
+        "L",
+        "!",
+        "O",
+        "M",
+        "Y",
+        "N",
+        "S",
+        "T",
+        "Q",
+        "5",
+        "F",
+        "A",
+        "R"
+      ]
+    },
+    {
+      "spec": "p02-extra-types.spec.json",
+      "lss": "p02-extra-types.lss",
+      "types": [
+        "K",
+        "B",
+        "C",
+        "E",
+        "H",
+        "P",
+        "D",
+        "G",
+        "U",
+        "I",
+        "*",
+        "|"
+      ]
+    },
+    {
+      "spec": "p03-minimal-matrix.spec.json",
+      "lss": "p03-minimal-matrix.lss",
+      "types": [
+        "F"
+      ]
+    },
+    {
+      "spec": "p04-languages-settings.spec.json",
+      "lss": "p04-languages-settings.lss",
+      "types": [
+        "L",
+        "M",
+        "N",
+        "T"
+      ]
+    },
+    {
+      "spec": "p05-entities.spec.json",
+      "lss": "p05-entities.lss",
+      "types": [
+        "X",
+        "S",
+        "!"
+      ]
+    }
+  ]
+}
