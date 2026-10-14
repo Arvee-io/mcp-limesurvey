@@ -11,6 +11,9 @@ import { ATTRIBUTE_DEFAULTS, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "../../s
  * - generation 6 (LimeSurvey 6.17.11): errors are {status} only; Ranking keeps answer options; get_question_properties
  *   throws a JSON-RPC error for "defaultvalue" as soon as the question has a default value.
  *
+ * Imports normalise line endings (CRLF and CR become LF in every text of the file, as libxml2 does). Stored attributes the
+ * theme table does not list are language dependent when their row has a language (plugin attributes).
+ *
  * Deliberate approximations: every language code from a small list counts as globally valid, users and permissions do
  * not exist, ids are numbers in the state and strings on the wire (like PDO), and the surveys/quota columns are the
  * ones of the imported file.
@@ -163,7 +166,9 @@ function rowsOf(document: Record<string, unknown>, section: string): Row[] {
     const row: Row = {};
     if (isRecord(entry)) {
       for (const [key, value] of Object.entries(entry)) {
-        if (!key.startsWith("#")) row[key] = value === null || value === undefined ? "" : String(value);
+        // An XML parser turns CRLF (and a lone CR) into LF in every text, CDATA included (XML 1.0, 2.11); libxml2, which
+        // LimeSurvey imports with, does the same.
+        if (!key.startsWith("#")) row[key] = value === null || value === undefined ? "" : String(value).replace(/\r\n?/g, "\n");
       }
     }
     return row;
@@ -668,7 +673,13 @@ export class FakeLimeSurvey {
     const theme = question.question_theme_name || BASE_THEME_BY_TYPE[question.type] || "";
     const defaults = ATTRIBUTE_DEFAULTS[theme] ?? {};
     const wanted = (name: string): boolean => (language === null ? !I18N_ATTRIBUTES.has(name) : I18N_ATTRIBUTES.has(name));
-    const stored = this.attributes.filter((item) => item.qid === question.qid && wanted(item.attribute) && item.language === (language ?? ""));
+    // The language class of a stored row: the 16 core attributes stored per language are language dependent; an
+    // attribute the theme table does not list (a plugin or custom theme attribute) is language dependent when its row
+    // has a language (only an attribute defined per language can have one), otherwise language independent.
+    const perLanguage = (item: FakeAttribute): boolean => I18N_ATTRIBUTES.has(item.attribute)
+      || (!Object.hasOwn(defaults, item.attribute) && item.language !== "");
+    const stored = this.attributes.filter((item) => item.qid === question.qid
+      && perLanguage(item) === (language !== null) && item.language === (language ?? ""));
     // HiddenQuestionAttributeProvider adds "image" to every question type (default ""); live 6.17.11 and 7.5.1 report it.
     const hidden = language === null ? ["image"] : [];
     const names = new Set([...Object.keys(defaults).filter(wanted), ...hidden, ...stored.map((item) => item.attribute)]);

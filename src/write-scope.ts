@@ -63,6 +63,8 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_verify_survey_against_lss: "none",
   // none: local spec check (reads the survey with read methods only when survey_id is given)
   limesurvey_validate_spec: "none",
+  // none: reads a survey, group or question as a spec (read methods only, also for the error answers)
+  limesurvey_get_survey_spec: "none",
   // none: local-only theme tools and theme reads
   limesurvey_generate_survey_theme: "none",
   limesurvey_validate_survey_theme: "none",

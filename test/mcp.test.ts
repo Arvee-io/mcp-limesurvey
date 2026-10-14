@@ -39,7 +39,7 @@ test("completes an MCP handshake, lists schemas, and calls a LimeSurvey tool", a
     assert.equal(client.getServerVersion()?.version, packageJson.version);
 
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 77);
+    assert.equal(listed.tools.length, 78);
     const listSurveys = listed.tools.find((tool) => tool.name === "limesurvey_list_surveys");
     assert.ok(listSurveys?.inputSchema);
     assert.ok(listSurveys?.outputSchema);

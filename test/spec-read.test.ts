@@ -41,10 +41,14 @@ test("[GEN-E] readSurveySpec reports a missing question text row only as the que
   const read = await readSurveySpec(client, sid) as SpecReadWithUnreadable;
 
   assert.deepEqual(read.languages, ["de", "en"]);
-  assert.deepEqual(
-    read.missing_translations,
-    [{ path: "groups[0].questions[0].text", language: "en" }],
-    "only the question text is a missing translation; the answers are not",
+  // The fields of the missing row (text, help, script) are missing translations; the answers hang on the row but are not.
+  assert.ok(
+    read.missing_translations.some((item) => item.path === "groups[0].questions[0].text" && item.language === "en"),
+    JSON.stringify(read.missing_translations),
+  );
+  assert.ok(
+    read.missing_translations.every((item) => item.language === "en" && /^groups\[0\]\.questions\[0\]\.(text|help|script)$/.test(item.path)),
+    `the answers are not missing translations: ${JSON.stringify(read.missing_translations)}`,
   );
 
   assert.ok(Array.isArray(read.unreadable), `unreadable is ${JSON.stringify(read.unreadable)}`);

@@ -6,23 +6,30 @@
 import { createHash } from "node:crypto";
 import { ATTRIBUTE_DEFAULTS, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "./attribute-defaults.js";
 import { unescapeHtmlSafe } from "./html-unescape.js";
-import { asString, isRecord, normalizeExpires, SURVEY_DEFAULTS, truthy } from "./spec-model.js";
+import { asString, CORE_THEME, isRecord, normalizeExpires, SURVEY_DEFAULTS, truthy, type TextMap } from "./spec-model.js";
 import type { JsonValue } from "./types.js";
 
-export type TextMap = Record<string, string>;
+export type { TextMap };
 export type AttributeValue = string | TextMap;
+/** A default value: a text per language, or (with same_default) one string for all languages. */
+export type DefaultValue = string | TextMap;
 
 export interface ComparableAnswer {
   code: string;
   text: TextMap;
   assessment_value: number;
   scale_id?: number;
+  /** Only when it is not 1 (a Ranking entry with a condition). */
+  relevance?: string;
 }
 
 export interface ComparableSubquestion {
   code: string;
   text: TextMap;
   scale_id?: number;
+  /** Only when it is not 1. */
+  relevance?: string;
+  default?: DefaultValue;
 }
 
 export interface ComparableQuestion {
@@ -37,12 +44,22 @@ export interface ComparableQuestion {
   subquestions: ComparableSubquestion[];
   answers: ComparableAnswer[];
   question_theme_name?: string;
+  /** The optional fields below are there only when they carry a value. */
+  preg?: string;
+  encrypted?: true;
+  same_default?: true;
+  same_script?: true;
+  modulename?: string;
+  script?: TextMap;
+  default?: DefaultValue;
+  default_other?: DefaultValue;
 }
 
 export interface ComparableGroup {
   title: TextMap;
   description: TextMap;
   relevance: string;
+  randomization_group?: string;
   questions: ComparableQuestion[];
 }
 
@@ -72,22 +89,35 @@ export interface ComparableSpec {
 
 export type SpecDifference = { path: string; expected: JsonValue; actual: JsonValue };
 
-/** CRLF to LF, trim, then the safe entity decoding. */
-function clean(value: string): string {
-  return unescapeHtmlSafe(value.replace(/\r\n/g, "\n").trim());
+/** CRLF (and a lone CR, which an XML parser also turns into LF) to LF, trimmed when asked, then the safe entity decoding. */
+function clean(value: string, trim: boolean): string {
+  const lines = value.replace(/\r\n?/g, "\n");
+  return unescapeHtmlSafe(trim ? lines.trim() : lines);
 }
 
-const cleanText = (value: unknown): string => clean(asString(value));
+/** Codes, relevance, language codes and the like: always trimmed. */
+const cleanText = (value: unknown): string => clean(asString(value), true);
 
-function attributeText(value: unknown): string {
-  if (typeof value === "string") return clean(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (value === null || value === undefined) return "";
-  return JSON.stringify(value);
+/** How the texts and attribute values of a spec are cleaned: trimmed (to compare) or as they are (to read). */
+interface Cleaning {
+  text: (value: unknown) => string;
+  attribute: (value: unknown) => string;
+}
+
+function cleaning(trim: boolean): Cleaning {
+  return {
+    text: (value) => clean(asString(value), trim),
+    attribute: (value) => {
+      if (typeof value === "string") return clean(value, trim);
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      if (value === null || value === undefined) return "";
+      return JSON.stringify(value);
+    },
+  };
 }
 
 /** A string counts for every language; a map keeps its languages. */
-function textMap(value: unknown, languages: readonly string[], convert: (item: unknown) => string = cleanText): TextMap {
+function textMap(value: unknown, languages: readonly string[], convert: (item: unknown) => string): TextMap {
   if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([language, item]) => [language, convert(item)]));
   const text = convert(value);
   return Object.fromEntries(languages.map((language) => [language, text]));
@@ -110,10 +140,22 @@ function baseTheme(type: string): string {
   return Object.hasOwn(BASE_THEME_BY_TYPE, type) ? (BASE_THEME_BY_TYPE[type] ?? "") : "";
 }
 
+/**
+ * Text that is kept as written, except that line endings become LF (a script is code: no trimming, no decoding; an
+ * import turns CRLF into LF, so a spec with CRLF and the survey read back must come out the same).
+ */
+const rawText = (value: unknown): string => asString(value).replace(/\r\n?/g, "\n");
+
+/**
+ * Attribute values that equal the default of the question theme are left out. A language-dependent attribute (one of
+ * the 16 known ones, or any attribute given as a map) is left out when every language holds the default, and otherwise
+ * kept with every language, so that the map names the languages of the survey (as the validator demands).
+ */
 function normalizeAttributes(
   attributes: unknown,
   theme: string,
   languages: readonly string[],
+  cleaner: Cleaning,
 ): Record<string, AttributeValue> {
   const defaults = Object.hasOwn(ATTRIBUTE_DEFAULTS, theme) ? ATTRIBUTE_DEFAULTS[theme] : undefined;
   const defaultOf = (name: string): string | undefined => (defaults && Object.hasOwn(defaults, name) ? defaults[name] : undefined);
@@ -121,51 +163,91 @@ function normalizeAttributes(
   if (!isRecord(attributes)) return result;
   for (const name of Object.keys(attributes).sort()) {
     const value = attributes[name];
-    if (I18N_ATTRIBUTES.has(name)) {
-      const perLanguage = textMap(value, languages, attributeText);
-      const kept = Object.fromEntries(Object.entries(perLanguage).filter(([, item]) => item !== defaultOf(name)));
-      if (Object.keys(kept).length > 0) result[name] = kept;
+    if (I18N_ATTRIBUTES.has(name) || isRecord(value)) {
+      const perLanguage = textMap(value, languages, cleaner.attribute);
+      if (!Object.values(perLanguage).every((item) => item === defaultOf(name))) result[name] = perLanguage;
     } else {
-      const text = attributeText(value);
+      const text = cleaner.attribute(value);
       if (text !== defaultOf(name)) result[name] = text;
     }
   }
   return result;
 }
 
-function normalizeQuestionForCompare(question: Record<string, unknown>, languages: readonly string[]): ComparableQuestion {
+/** A default value: empty values dropped; with same_default one string (the value of the base language). */
+function normalizeDefault(value: unknown, languages: readonly string[], sameDefault: boolean, cleaner: Cleaning): DefaultValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  const entries = Object.entries(textMap(value, languages, cleaner.text)).filter(([, text]) => text !== "");
+  if (entries.length === 0) return undefined;
+  if (!sameDefault) return Object.fromEntries(entries);
+  const base = languages[0];
+  return (entries.find(([language]) => language === base) ?? entries[0])?.[1];
+}
+
+function normalizeQuestionForCompare(question: Record<string, unknown>, languages: readonly string[], cleaner: Cleaning): ComparableQuestion {
   const type = asString(question.type);
-  const explicitTheme = asString(question.question_theme_name);
   const base = baseTheme(type);
+  // The theme name core, like none, is the base theme of the type: nothing to state, and its defaults apply.
+  const explicitTheme = asString(question.question_theme_name);
+  const extendedTheme = explicitTheme !== "" && explicitTheme !== CORE_THEME && explicitTheme !== base ? explicitTheme : "";
   const scale = (item: Record<string, unknown>): { scale_id?: number } => {
     const scaleId = integer(item.scale_id);
     return scaleId === 0 ? {} : { scale_id: scaleId };
   };
+  const relevanceOf = (item: Record<string, unknown>): { relevance?: string } => {
+    const relevance = cleanText(item.relevance) || "1";
+    return relevance === "1" ? {} : { relevance };
+  };
+  const sameDefault = truthy(question.same_default);
+  const defaultValue = normalizeDefault(question.default, languages, sameDefault, cleaner);
+  const defaultOther = normalizeDefault(question.default_other, languages, sameDefault, cleaner);
+  const script = textMap(question.script, languages, rawText);
+  const preg = rawText(question.preg);
+  const modulename = rawText(question.modulename);
   return {
     code: cleanText(question.code),
     type,
-    text: textMap(question.text, languages),
-    help: textMap(question.help, languages),
+    text: textMap(question.text, languages, cleaner.text),
+    help: textMap(question.help, languages, cleaner.text),
     mandatory: question.mandatory === "soft" ? "soft" : truthy(question.mandatory),
     relevance: cleanText(question.relevance) || "1",
     other: truthy(question.other),
-    attributes: normalizeAttributes(question.attributes, explicitTheme || base, languages),
-    subquestions: records(question.subquestions).map((item) => ({
-      code: cleanText(item.code),
-      text: textMap(item.text, languages),
-      ...scale(item),
-    })),
+    attributes: normalizeAttributes(question.attributes, extendedTheme || base, languages, cleaner),
+    subquestions: records(question.subquestions).map((item) => {
+      const subDefault = normalizeDefault(item.default, languages, sameDefault, cleaner);
+      return {
+        code: cleanText(item.code),
+        text: textMap(item.text, languages, cleaner.text),
+        ...scale(item),
+        ...relevanceOf(item),
+        ...(subDefault !== undefined ? { default: subDefault } : {}),
+      };
+    }),
     answers: records(question.answers).map((item) => ({
       code: cleanText(item.code),
-      text: textMap(item.text, languages),
+      text: textMap(item.text, languages, cleaner.text),
       assessment_value: integer(item.assessment_value),
       ...scale(item),
+      ...relevanceOf(item),
     })),
-    ...(explicitTheme !== "" && explicitTheme !== base ? { question_theme_name: explicitTheme } : {}),
+    ...(extendedTheme !== "" ? { question_theme_name: extendedTheme } : {}),
+    ...(preg !== "" ? { preg } : {}),
+    ...(truthy(question.encrypted) ? { encrypted: true as const } : {}),
+    ...(sameDefault ? { same_default: true as const } : {}),
+    ...(truthy(question.same_script) ? { same_script: true as const } : {}),
+    ...(modulename !== "" ? { modulename } : {}),
+    ...(Object.values(script).some((text) => text !== "") ? { script } : {}),
+    ...(defaultValue !== undefined ? { default: defaultValue } : {}),
+    ...(defaultOther !== undefined ? { default_other: defaultOther } : {}),
   };
 }
 
-export function normalizeSpec(spec: unknown, languages: readonly string[]): ComparableSpec {
+/**
+ * The normal form of a spec. The texts and attribute values keep their surrounding blanks, so what a survey holds comes
+ * out as it is; with trim true they are trimmed, which is how two forms are compared (LimeSurvey may trim a text it stores).
+ */
+export function normalizeSpec(spec: unknown, languages: readonly string[], options: { trim?: boolean } = {}): ComparableSpec {
+  const cleaner = cleaning(options.trim === true);
   const root = isRecord(spec) ? spec : {};
   const survey = isRecord(root.survey) ? root.survey : {};
   const language = cleanText(survey.language ?? SURVEY_DEFAULTS.language);
@@ -174,10 +256,10 @@ export function normalizeSpec(spec: unknown, languages: readonly string[]): Comp
   const template = cleanText(survey.template);
   return {
     survey: {
-      title: textMap(survey.title, languages),
-      description: textMap(survey.description, languages),
-      welcometext: textMap(survey.welcometext, languages),
-      endtext: textMap(survey.endtext, languages),
+      title: textMap(survey.title, languages, cleaner.text),
+      description: textMap(survey.description, languages, cleaner.text),
+      welcometext: textMap(survey.welcometext, languages, cleaner.text),
+      endtext: textMap(survey.endtext, languages, cleaner.text),
       language,
       additional_languages: [...new Set(additional.map((item) => cleanText(item)))].filter((item) => item !== language),
       anonymized: flag(survey.anonymized, SURVEY_DEFAULTS.anonymized),
@@ -191,12 +273,16 @@ export function normalizeSpec(spec: unknown, languages: readonly string[]): Comp
       showqnumcode: cleanText(survey.showqnumcode ?? SURVEY_DEFAULTS.showqnumcode) || SURVEY_DEFAULTS.showqnumcode,
       expires: normalizeExpires(cleanText(survey.expires)),
     },
-    groups: records(root.groups).map((group) => ({
-      title: textMap(group.title, languages),
-      description: textMap(group.description, languages),
-      relevance: cleanText(group.relevance) || "1",
-      questions: records(group.questions).map((question) => normalizeQuestionForCompare(question, languages)),
-    })),
+    groups: records(root.groups).map((group) => {
+      const randomization = rawText(group.randomization_group);
+      return {
+        title: textMap(group.title, languages, cleaner.text),
+        description: textMap(group.description, languages, cleaner.text),
+        relevance: cleanText(group.relevance) || "1",
+        ...(randomization !== "" ? { randomization_group: randomization } : {}),
+        questions: records(group.questions).map((question) => normalizeQuestionForCompare(question, languages, cleaner)),
+      };
+    }),
   };
 }
 
@@ -294,6 +380,7 @@ export function diffSpecs(expected: ComparableSpec, actual: ComparableSpec): Spe
     diffValue(`${path}.title`, expectedGroup.title, actualGroup.title, out);
     diffValue(`${path}.description`, expectedGroup.description, actualGroup.description, out);
     diffValue(`${path}.relevance`, expectedGroup.relevance, actualGroup.relevance, out);
+    diffValue(`${path}.randomization_group`, expectedGroup.randomization_group, actualGroup.randomization_group, out);
     const questionPath = `${path}.questions`;
     const actualIndex = new Map(actualGroup.questions.map((question, position) => [question.code, position] as const));
     const matched = new Set<number>();
