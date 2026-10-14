@@ -438,9 +438,12 @@ export async function replaceQuestion(
   }
 }
 
-/** Whether the old question is still there after an unclear delete_question: present, gone, or unknown. */
-async function probeOldQuestion(
-  client: LimeSurveyClient,
+/**
+ * Whether the old question is still there after an unclear delete_question: present, gone, or unknown. Also used by
+ * limesurvey_update_question_from_spec, which deletes the old question the same way.
+ */
+export async function probeOldQuestion(
+  client: Pick<LimeSurveyClient, "call">,
   surveyId: number,
   oldQid: number,
   expectedTitle: string,

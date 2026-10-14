@@ -98,21 +98,33 @@ function clean(value: string, trim: boolean): string {
 /** Codes, relevance, language codes and the like: always trimmed. */
 const cleanText = (value: unknown): string => clean(asString(value), true);
 
-/** How the texts and attribute values of a spec are cleaned: trimmed (to compare) or as they are (to read). */
+/** A text in the normal form of a spec read from a survey (LF, safe entity decoding, not trimmed). */
+export const normalText = (value: string): string => clean(value, false);
+
+/** A script in the normal form of a spec: only the line endings become LF (a script is code). */
+export const normalScript = (value: string): string => value.replace(/\r\n?/g, "\n");
+
+/** How the texts, scripts and attribute values of a spec are cleaned: trimmed (to compare), as read, or raw. */
 interface Cleaning {
   text: (value: unknown) => string;
+  script: (value: unknown) => string;
   attribute: (value: unknown) => string;
 }
 
-function cleaning(trim: boolean): Cleaning {
+const attributeText = (value: unknown, text: (item: string) => string): string => {
+  if (typeof value === "string") return text(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null || value === undefined) return "";
+  return JSON.stringify(value);
+};
+
+function cleaning(trim: boolean, raw: boolean): Cleaning {
+  // Raw: the values exactly as LimeSurvey stores them (CRLF and entities kept), for writing unchanged texts back.
+  if (raw) return { text: (value) => asString(value), script: (value) => asString(value), attribute: (value) => attributeText(value, (item) => item) };
   return {
     text: (value) => clean(asString(value), trim),
-    attribute: (value) => {
-      if (typeof value === "string") return clean(value, trim);
-      if (typeof value === "number" || typeof value === "boolean") return String(value);
-      if (value === null || value === undefined) return "";
-      return JSON.stringify(value);
-    },
+    script: (value) => rawText(value),
+    attribute: (value) => attributeText(value, (item) => clean(item, trim)),
   };
 }
 
@@ -201,7 +213,7 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
   const sameDefault = truthy(question.same_default);
   const defaultValue = normalizeDefault(question.default, languages, sameDefault, cleaner);
   const defaultOther = normalizeDefault(question.default_other, languages, sameDefault, cleaner);
-  const script = textMap(question.script, languages, rawText);
+  const script = textMap(question.script, languages, cleaner.script);
   const preg = rawText(question.preg);
   const modulename = rawText(question.modulename);
   return {
@@ -245,9 +257,10 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
 /**
  * The normal form of a spec. The texts and attribute values keep their surrounding blanks, so what a survey holds comes
  * out as it is; with trim true they are trimmed, which is how two forms are compared (LimeSurvey may trim a text it stores).
+ * With raw true the texts, scripts and attribute values are not cleaned at all (the same structure, the stored values).
  */
-export function normalizeSpec(spec: unknown, languages: readonly string[], options: { trim?: boolean } = {}): ComparableSpec {
-  const cleaner = cleaning(options.trim === true);
+export function normalizeSpec(spec: unknown, languages: readonly string[], options: { trim?: boolean; raw?: boolean } = {}): ComparableSpec {
+  const cleaner = cleaning(options.trim === true, options.raw === true);
   const root = isRecord(spec) ? spec : {};
   const survey = isRecord(root.survey) ? root.survey : {};
   const language = cleanText(survey.language ?? SURVEY_DEFAULTS.language);

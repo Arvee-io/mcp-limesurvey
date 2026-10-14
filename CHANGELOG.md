@@ -34,6 +34,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the new element again by its id, while an unclear import outcome is reported
   with read-only candidates instead of being cleaned up. Translation gaps that a
   question import would fill need `acknowledge: ["fill_translation_gaps"]`.
+- `limesurvey_update_question_from_spec` changes one question to a given end state
+  (answers, subquestions, attributes, type, mandatory, texts): a dry run under
+  write scope `none` shows the changes, the mode and the risks; the real run needs
+  the fingerprint, a confirmation and the acknowledgement of the reported risks,
+  writes texts or columns in place or replaces the question at the same place,
+  compares the new question in full before the old one is deleted, and rolls back
+  otherwise. On active surveys only texts change.
+- `limesurvey_update_survey_texts` changes texts of the survey, groups, questions
+  and subquestions per language, also on active surveys, and refuses what
+  RemoteControl cannot write before anything is written.
+- Attributes that the theme of a question does not define, and a question theme
+  of another question type, are errors before anything is written
+  (`ATTRIBUTE_NAMES` and `THEME_TYPES`, generated from LimeSurvey 6.17.11 and
+  7.5.1).
 - Texts per language: every text field of a spec takes a string or a map per
   language; new structure must cover exactly the survey languages.
   Language-dependent attributes are written once per language.

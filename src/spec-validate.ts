@@ -24,6 +24,7 @@ import {
   SUBQUESTION_CODE_PATTERN,
   SUBQUESTION_KEYS,
   SUPPORTED_TYPES,
+  CORE_THEME,
   SURVEY_BOOLEAN_KEYS,
   SURVEY_DEFAULTS,
   SURVEY_FORMATS,
@@ -38,7 +39,22 @@ import {
   unescapeStrings,
   type SpecKind,
 } from "./spec-model.js";
-import { I18N_ATTRIBUTES } from "./attribute-defaults.js";
+import { ATTRIBUTE_NAMES, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES, THEME_TYPES } from "./attribute-defaults.js";
+
+/** The attribute names per question theme (core and extended themes of LimeSurvey 6 and 7). */
+const THEME_ATTRIBUTES: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries(ATTRIBUTE_NAMES).map(([theme, names]) => [theme, new Set(names)]),
+);
+/** Every attribute name some theme defines; a name outside it (a plugin attribute) is not held to a theme. */
+const THEME_ATTRIBUTE_NAMES: ReadonlySet<string> = new Set(Object.values(ATTRIBUTE_NAMES).flat());
+
+/** The theme whose attributes a question uses: question_theme_name, or (none or core) the base theme of the type. */
+function themeOfQuestion(question: Record<string, unknown>): string | undefined {
+  const theme = typeof question.question_theme_name === "string" ? question.question_theme_name.trim() : "";
+  if (theme !== "" && theme !== CORE_THEME) return theme;
+  const type = typeof question.type === "string" ? question.type : "";
+  return Object.hasOwn(BASE_THEME_BY_TYPE, type) ? BASE_THEME_BY_TYPE[type] : undefined;
+}
 
 export type SpecFinding = { path: string; message: string; fix: string };
 export type SpecWarning = { path: string; message: string };
@@ -58,6 +74,16 @@ export interface SpecContext {
    * allowed and reported as a warning.
    */
   rankingGeneration?: 6 | 7;
+  /**
+   * Embedded data URIs are not reported (limesurvey_update_question_from_spec reports them as the risk data_uri, because
+   * an unchanged text of the question may hold one).
+   */
+  allowDataUri?: boolean;
+  /**
+   * Paths of language maps that may name only some of the languages (texts of an existing question that have no row in
+   * a language: an unchanged translation gap), for example text or subquestions[0].text.
+   */
+  subsetPaths?: ReadonlySet<string>;
 }
 
 export type SpecSummary = { groups?: number; questions?: number; subquestions?: number; answers?: number; type?: string };
@@ -71,7 +97,8 @@ export interface SpecValidation {
 
 /** Characters XML 1.0 cannot store: control characters, the non-characters U+FFFE and U+FFFF and unpaired surrogates. */
 const XML_FORBIDDEN_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF￾￿]/u;
-const DATA_URI_SOURCE = /src\s*=\s*["']?\s*data:/i;
+/** An image embedded as a data URI, which LimeSurvey removes from a text whenever it saves the row. */
+export const DATA_URI_SOURCE = /src\s*=\s*["']?\s*data:/i;
 const TEXT_FIX = "Give one string (it is used for every language of the survey) or a map per language such as {\"de\": \"...\", \"en\": \"...\"}.";
 
 const keyPath = (base: string, name: string): string => (base === "" ? name : `${base}.${name}`);
@@ -134,6 +161,8 @@ interface Scope {
   languages: readonly string[] | undefined;
   /** The LimeSurvey generation of the target instance when it is known; it decides what a Ranking entry may have. */
   generation: 6 | 7 | undefined;
+  /** Map paths that may name only some of the languages (SpecContext.subsetPaths). */
+  subsetPaths: ReadonlySet<string>;
   counters: { groups: number; questions: number; subquestions: number; answers: number };
 }
 
@@ -206,7 +235,7 @@ function checkLanguageMap(findings: Findings, path: string, map: Record<string, 
       );
     }
   }
-  if (options.subset) return;
+  if (options.subset || scope.subsetPaths.has(path)) return;
   const missing = languages.filter((language) => !keys.includes(language));
   if (missing.length > 0) {
     findings.error(
@@ -495,12 +524,18 @@ function validateSubquestions(findings: Findings, path: string, subquestions: un
   });
 }
 
-function validateAttributes(findings: Findings, path: string, attributes: unknown, scope: Scope): void {
+function validateAttributes(findings: Findings, path: string, attributes: unknown, scope: Scope, question: Record<string, unknown>): void {
   if (attributes === undefined || attributes === null) return;
   if (!isRecord(attributes)) {
     findings.error(path, `attributes must be an object, got ${describeValue(attributes)}.`, 'Use { "attribute_name": "value" }.');
     return;
   }
+  // An attribute some theme defines but the theme of this question does not: LimeSurvey does not use it, and the import
+  // does not keep it. A theme the tables do not know (a custom theme) and plugin attributes are not checked.
+  const theme = themeOfQuestion(question);
+  const themeAttributes = theme === undefined ? undefined : THEME_ATTRIBUTES.get(theme);
+  const type = typeof question.type === "string" ? question.type : "";
+  const extended = theme !== undefined && theme !== BASE_THEME_BY_TYPE[type];
   for (const [name, value] of Object.entries(attributes)) {
     const attributePath = keyPath(path, name);
     if (!ATTRIBUTE_NAME_PATTERN.test(name)) {
@@ -508,6 +543,13 @@ function validateAttributes(findings: Findings, path: string, attributes: unknow
         attributePath,
         `The attribute name ${JSON.stringify(name)} is invalid.`,
         "Use 1-50 characters: a letter first, then letters, digits or underscores (for example display_columns).",
+      );
+    } else if (themeAttributes !== undefined && THEME_ATTRIBUTE_NAMES.has(name) && !themeAttributes.has(name)) {
+      const user = extended ? `the question theme ${theme ?? ""} (type ${type})` : `type ${type}`;
+      findings.error(
+        attributePath,
+        `The attribute ${name} is not defined for ${user}: LimeSurvey does not use it for this question and does not keep it.`,
+        `${user.charAt(0).toUpperCase()}${user.slice(1)} does not use ${name}; remove it${extended ? "" : " (or use a question theme that defines it)"}.`,
       );
     }
     if (isRecord(value)) {
@@ -571,6 +613,17 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
       `The question theme name ${typeof theme === "string" ? JSON.stringify(theme) : describeValue(theme)} is invalid.`,
       "Give the name of a question theme such as listradio or bootstrap_buttons, or leave question_theme_name out for the base theme of the type.",
     );
+  } else if (typeof theme === "string" && theme !== CORE_THEME && typeof question.type === "string") {
+    // A theme the tables know serves certain types only (design 9.27); a theme they do not know (a custom one) is not checked.
+    const types = Object.hasOwn(THEME_TYPES, theme) ? THEME_TYPES[theme] : undefined;
+    if (types !== undefined && types.length > 0 && !types.includes(question.type)) {
+      const base = BASE_THEME_BY_TYPE[question.type];
+      findings.error(
+        keyPath(path, "question_theme_name"),
+        `The question theme ${theme} is for type${types.length === 1 ? "" : "s"} ${types.join(", ")}, not for type ${question.type}.`,
+        `Use a question theme of type ${question.type}${base !== undefined ? ` (for example ${base})` : ""}, or leave question_theme_name out.`,
+      );
+    }
   }
   const mandatory = question.mandatory;
   if (mandatory !== undefined && typeof mandatory !== "boolean" && mandatory !== "soft") {
@@ -578,7 +631,7 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
   }
   checkBoolean(findings, keyPath(path, "other"), question.other);
   for (const name of ["encrypted", "same_default", "same_script"] as const) checkBoolean(findings, keyPath(path, name), question[name]);
-  validateAttributes(findings, keyPath(path, "attributes"), question.attributes, scope);
+  validateAttributes(findings, keyPath(path, "attributes"), question.attributes, scope, question);
   const sameDefault = question.same_default === true;
   checkDefault(findings, keyPath(path, "default"), question.default, scope, sameDefault);
   checkDefault(findings, keyPath(path, "default_other"), question.default_other, scope, sameDefault);
@@ -680,8 +733,8 @@ function validateGroup(findings: Findings, group: unknown, path: string, scope: 
   questions.forEach((question, index) => validateQuestion(findings, question, indexPath(questionsPath, index), scope));
 }
 
-/** Every string of the spec: XML 1.0 control characters and embedded data URIs. */
-function checkStrings(findings: Findings, value: unknown, path: string): void {
+/** Every string of the spec: XML 1.0 control characters and (unless allowed) embedded data URIs. */
+function checkStrings(findings: Findings, value: unknown, path: string, allowDataUri: boolean): void {
   if (typeof value === "string") {
     const forbidden = XML_FORBIDDEN_CHARACTER.exec(value);
     if (forbidden) {
@@ -692,7 +745,7 @@ function checkStrings(findings: Findings, value: unknown, path: string): void {
         "Remove the character (copy the text again without hidden control characters).",
       );
     }
-    if (DATA_URI_SOURCE.test(value)) {
+    if (!allowDataUri && DATA_URI_SOURCE.test(value)) {
       findings.error(
         path,
         'The text embeds an image as a data URI (src="data:...") which LimeSurvey removes when it saves the text.',
@@ -700,9 +753,9 @@ function checkStrings(findings: Findings, value: unknown, path: string): void {
       );
     }
   } else if (Array.isArray(value)) {
-    value.forEach((item, index) => checkStrings(findings, item, indexPath(path, index)));
+    value.forEach((item, index) => checkStrings(findings, item, indexPath(path, index), allowDataUri));
   } else if (isRecord(value)) {
-    for (const [name, item] of Object.entries(value)) checkStrings(findings, item, keyPath(path, name));
+    for (const [name, item] of Object.entries(value)) checkStrings(findings, item, keyPath(path, name), allowDataUri);
   }
 }
 
@@ -714,6 +767,7 @@ export function validateSpec(kind: SpecKind, spec: unknown, context: SpecContext
     existingCodes: new Set((context.existingQuestionCodes ?? []).map((code) => code.toLowerCase())),
     languages: kind === "survey" ? (isRecord(unescaped) ? languagesOfSurveySpec(unescaped.survey) : undefined) : context.languages,
     generation: context.rankingGeneration,
+    subsetPaths: context.subsetPaths ?? new Set(),
     counters: { groups: 0, questions: 0, subquestions: 0, answers: 0 },
   };
 
@@ -735,7 +789,7 @@ export function validateSpec(kind: SpecKind, spec: unknown, context: SpecContext
   } else {
     validateQuestion(findings, unescaped, "", scope);
   }
-  checkStrings(findings, unescaped, "");
+  checkStrings(findings, unescaped, "", context.allowDataUri === true);
 
   const { counters } = scope;
   let summary: SpecSummary;

@@ -17,7 +17,7 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **80 MCP tools:** official methods plus focused workflow, survey description, and theme tools
+- **82 MCP tools:** official methods plus focused workflow, survey description, and theme tools
 - **Surveys from a description:** validate a JSON survey description, create the survey from it,
   and read any survey, group, or question back as such a description, without any local file
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
@@ -36,9 +36,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
 | Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation, survey-vs-.lss verification, question replacement | 14 |
-| Survey descriptions (spec) | Validate a description, read a survey, group, or question as a description, create a survey, insert a question or a group at a given position | 5 |
+| Survey descriptions (spec) | Validate a description, read a survey, group, or question as a description, create a survey, insert a question or a group at a given position, change a question, change texts per language | 7 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **80** |
+| **Total** | | **82** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -231,18 +231,20 @@ around a block by calling the RemoteControl API directly.
 | Write scope | Tools |
 |---|---|
 | `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`, `limesurvey_validate_spec`, `limesurvey_get_survey_spec`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_verify_survey_against_lss`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
-| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question`, `limesurvey_create_survey_from_spec`, `limesurvey_add_question_from_spec`, `limesurvey_add_group_from_spec` |
+| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question`, `limesurvey_create_survey_from_spec`, `limesurvey_add_question_from_spec`, `limesurvey_add_group_from_spec`, `limesurvey_update_question_from_spec`, `limesurvey_update_survey_texts` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 80 tools are listed (43 + 18 + 7 + 12). A tool that is missing from the
-server's scope table is treated as `outreach`. Two calls are argument-dependent:
+All 82 tools are listed (43 + 20 + 7 + 12). A tool that is missing from the
+server's scope table is treated as `outreach`. Some calls are argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
 responses; `lss`, `csv`, and `txt` imports stay at `content`. And
 `limesurvey_invite_participants` with `dry_run=true` needs only `none`, because
 it sends nothing and never calls `invite_participants` (see
-[Checking an invitation run first](#checking-an-invitation-run-first)).
+[Checking an invitation run first](#checking-an-invitation-run-first)). The same
+holds for `limesurvey_update_question_from_spec` and
+`limesurvey_update_survey_texts` with `dry_run=true`: they read only.
 
 `content` covers every survey setting that LimeSurvey lets
 `set_survey_properties` change, including start and expiry dates, notification
@@ -407,6 +409,8 @@ path, which keeps them usable from remote MCP clients.
 | `limesurvey_create_survey_from_spec` | `content` | Validates the description before any request, generates the `.lss` in memory, imports it with `import_survey`, reads the new survey back, and reports `verification { ok, differences, differences_total, truncated }`. |
 | `limesurvey_add_question_from_spec` | `content` | Inserts one question into a group of an inactive survey at `position` (1-based index, `{ "before": "<code>" }` or `{ "after": "<code>" }`; default: at the end), then reads it back and compares it with the description. `acknowledge: ["fill_translation_gaps"]` allows LimeSurvey to fill missing translations of other questions. |
 | `limesurvey_add_group_from_spec` | `content` | Inserts one group with its questions into an inactive survey at `position` (1-based index, `{ "before": <group_id> }` or `{ "after": <group_id> }`; default: at the end), then reads it back and compares it. |
+| `limesurvey_update_question_from_spec` | `content` (`none` with `dry_run`) | Changes one question to the given end state: a dry run shows changes, mode, and risks; the real run writes texts, columns, or replaces the question at the same place, then compares. |
+| `limesurvey_update_survey_texts` | `content` (`none` with `dry_run`) | Changes texts of the survey, groups, questions, and subquestions per language, also on active surveys, and reads them back. |
 
 ### Spec format
 
@@ -538,8 +542,59 @@ questions in the survey with the base-language text. If the survey has such gaps
 unless `acknowledge: ["fill_translation_gaps"]` is given; the filled texts are
 then listed under `side_effects`. Importing a group fills nothing.
 
-### Verification
+### Changing a question
 
+`limesurvey_update_question_from_spec` takes the desired end state of one
+question, typically the `spec` of `limesurvey_get_survey_spec` with the change
+applied. Run it first with `dry_run: true` (write scope `none`, read methods
+only): the result lists `changes` (`path`, `kind`, `current`, `desired`), the
+`mode`, the `risks` (`code`, `blocking`, `acknowledgeable`, `detail`), the `plan`,
+and the `fingerprint` of the current question. The real run needs
+`expected_fingerprint` (from the dry run or the read; otherwise `STALE_SPEC`, nothing
+written), `confirm_destructive_action: true`, and `acknowledge` for every blocking,
+acknowledgeable risk (`qid_bound_links`, `quota_members`, `other_default`,
+`removals`, `fill_translation_gaps`, `answer_code_references`; otherwise
+`UPDATE_QUESTION_BLOCKED`, nothing written).
+
+| Mode | When | How |
+|---|---|---|
+| `none` | The end state equals the question | Nothing is written. |
+| `texts` | Only question, help, or subquestion texts change | `set_question_properties` with `questionl10ns`; also on active surveys. |
+| `columns` | Only `mandatory`, `relevance`, `preg`, `other`, `same_default`, `same_script`, `encrypted`, `question_theme_name`, `modulename`, or the code change (inactive survey) | `set_question_properties` on the same question. |
+| `replace` | Anything else: answers (including their texts), subquestions, attributes, default values, type, script (inactive survey) | A new question is imported from a generated `.lsq` at the same place, read back and compared in full; only then the old question is deleted. Any difference rolls back: the new question is deleted and the old one keeps its code. The question gets a new ID. |
+
+Unchanged texts are written back as LimeSurvey stored them. On an active survey
+every change other than texts answers `SURVEY_ACTIVE` without writing; answer
+texts cannot be written on active surveys at all. References from other
+questions to the code (`code_references`), SGQA references, and embedded data URIs
+block a run that would break them and cannot be acknowledged; the check reads
+relevance, attributes, scripts, default values, and answer texts of every question
+(in free texts only expressions in `{...}`) and also finds removed comment,
+`other`, and array column variables. Texts the question has no row for in a
+language count as unchanged; a replacement reports them as `unreadable_texts`
+(acknowledged with `fill_translation_gaps`). Attributes the new type or theme does
+not define, and a `question_theme_name` of another question type, are errors
+before anything is written. Long lists of locations are capped (`locations_total`).
+If only the read-back after a successful write fails, the error is
+`VERIFY_READ_FAILED` with `written: true`: the change is stored, read the question
+again before retrying.
+
+### Changing texts
+
+`limesurvey_update_survey_texts` changes texts of the survey (`title`,
+`description`, `welcometext`, `endtext`), of groups (by `group_id`), of questions
+(`text`, `help`, by code), and of subquestions (by code and `scale_id`), per
+language, also on active surveys. Every text is a string for all survey
+languages or a map with some of them. Answers and attributes in `texts` answer
+`TEXT_NOT_WRITABLE` (on an inactive survey use
+`limesurvey_update_question_from_spec`); a group of another survey, an unknown
+code, a language the survey does not have, and an embedded data URI in the
+affected row are refused before anything is written. `dry_run: true` lists the
+changes under write scope `none`; `expected_fingerprint` guards against changes in
+between. If a write step fails, the texts already written are set back
+(`TEXT_UPDATE_FAILED` with `rolled_back`).
+
+### Verification
 After the import the survey is read back with read methods only and compared
 with the description. Question attributes are compared without values that equal
 LimeSurvey's default for the question theme (the defaults are generated from the

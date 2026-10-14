@@ -53,11 +53,14 @@ async function readTheme(file) {
 async function load(root) {
   const core = {};
   const baseThemeByType = {};
+  // The question type each theme is for (metadata questionType of its config.xml).
+  const typeOfTheme = {};
   for (const file of await findConfigs(path.join(root, "application", "views", "survey", "questions", "answer"))) {
     const theme = await readTheme(file);
     if (!theme.type) continue;
     core[theme.name] = theme.attributes;
     baseThemeByType[theme.type] = theme.name;
+    typeOfTheme[theme.name] = theme.type;
   }
   const effective = { ...core };
   const i18n = new Set();
@@ -72,8 +75,9 @@ async function load(root) {
       else merged[name] = def;
     }
     effective[theme.name] = merged;
+    typeOfTheme[theme.name] = theme.type;
   }
-  return { effective, baseThemeByType, i18n };
+  return { effective, baseThemeByType, i18n, typeOfTheme };
 }
 
 const v6 = await load(root6);
@@ -96,6 +100,25 @@ for (const theme of themes) {
     entries[name] = (b[name] ?? a[name]).default;
   }
   table[theme] = entries;
+}
+
+// The names of the attributes a theme defines in either version, whatever their default (the defaults table above leaves
+// out names whose default differs). The spec check uses them: an attribute some theme defines but the theme of the
+// question does not is not used by that question.
+const names = {};
+let nameCount = 0;
+for (const theme of themes) {
+  const a = v6.effective[theme] ?? {};
+  const b = v7.effective[theme] ?? {};
+  names[theme] = [...new Set([...Object.keys(HIDDEN_ATTRIBUTES), ...Object.keys(a), ...Object.keys(b)])].sort();
+  nameCount += names[theme].length;
+}
+const distinctNames = new Set(Object.values(names).flat()).size;
+
+// The question types each theme is for, in either version (the union): question_theme_name has to fit the type.
+const themeTypes = {};
+for (const theme of themes) {
+  themeTypes[theme] = [...new Set([v6.typeOfTheme[theme], v7.typeOfTheme[theme]].filter((type) => typeof type === "string" && type !== ""))].sort();
 }
 
 const types = [...new Set([...Object.keys(v6.baseThemeByType), ...Object.keys(v7.baseThemeByType)])].sort();
@@ -127,5 +150,22 @@ const lines = [
 ];
 for (const theme of themes) lines.push(`  ${q(theme)}: ${q(table[theme])},`);
 lines.push("};", "");
+lines.push(
+  "/**",
+  " * Names of the attributes each question theme defines in LimeSurvey 6 or 7 (the union, whatever the default; image",
+  " * included). An attribute that some theme defines but the theme of a question does not is not used by that question.",
+  " */",
+  "export const ATTRIBUTE_NAMES: Readonly<Record<string, readonly string[]>> = {",
+);
+for (const theme of themes) lines.push(`  ${q(theme)}: ${q(names[theme])},`);
+lines.push("};", "");
+lines.push(
+  "/** The question types each question theme is for in LimeSurvey 6 or 7 (metadata questionType of its config.xml). */",
+  "export const THEME_TYPES: Readonly<Record<string, readonly string[]>> = {",
+);
+for (const theme of themes) lines.push(`  ${q(theme)}: ${q(themeTypes[theme])},`);
+lines.push("};", "");
 await writeFile(output, lines.join("\n"), "utf8");
-console.log(`themes=${themes.length} types=${types.length} i18n=${i18n.length} version-dependent defaults left out=${dropped}`);
+console.log(`themes=${themes.length} types=${types.length} i18n=${i18n.length} version-dependent defaults left out=${dropped} `
+  + `attribute names=${nameCount} distinct names=${distinctNames} `
+  + `themes with types=${Object.values(themeTypes).filter((list) => list.length > 0).length}`);

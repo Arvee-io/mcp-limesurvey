@@ -51,7 +51,7 @@ export interface AddContext {
 }
 
 /** The workflow name and the size limit of its answer, for errors whose lists are cut. */
-interface Limit {
+export interface Limit {
   workflow: string;
   maxChars: number;
 }
@@ -80,7 +80,7 @@ function integer(value: JsonValue | undefined): number | undefined {
 const sameList = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((item, index) => item === b[index]);
 
 /** An error whose lists are cut (keeping their start) so that the error answer fits LIMESURVEY_MAX_RESPONSE_CHARS. */
-function cappedError<T extends Record<string, readonly unknown[]>>(
+export function cappedError<T extends Record<string, readonly unknown[]>>(
   limit: Limit,
   message: string,
   code: string,
@@ -92,7 +92,7 @@ function cappedError<T extends Record<string, readonly unknown[]>>(
 }
 
 /** A cut list with its full number and whether it was cut: { [name]: shown, [name]_total, truncated }. */
-const cutList = (name: string, shown: readonly unknown[], all: readonly unknown[]): JsonObject => ({
+export const cutList = (name: string, shown: readonly unknown[], all: readonly unknown[]): JsonObject => ({
   [name]: json(shown),
   [`${name}_total`]: all.length,
   truncated: shown.length < all.length,
@@ -257,7 +257,7 @@ function checkSaved(method: string, id: number, data: JsonObject, answer: JsonOb
   }
 }
 
-async function setQuestion(rpc: RpcClient, qid: number, data: JsonObject): Promise<void> {
+export async function setQuestion(rpc: RpcClient, qid: number, data: JsonObject): Promise<void> {
   checkSaved("set_question_properties", qid, data, objectOf(await rpc.call("set_question_properties", [qid, data])));
 }
 
@@ -267,7 +267,7 @@ async function setGroup(rpc: RpcClient, gid: number, data: JsonObject): Promise<
 }
 
 /** The main questions of a group in the order LimeSurvey numbers them: (question_order, code). */
-async function questionSequence(rpc: RpcClient, surveyId: number, groupId: number): Promise<OutlineQuestion[]> {
+export async function questionSequence(rpc: RpcClient, surveyId: number, groupId: number): Promise<OutlineQuestion[]> {
   const rows = await rpc.call("list_questions", [surveyId, groupId]);
   return (Array.isArray(rows) ? rows : [])
     .map(objectOf)
@@ -293,7 +293,7 @@ async function groupSequence(rpc: RpcClient, surveyId: number, base: string): Pr
  * renumbers the group first (updateQuestionOrder after every saved field, RC:2069-2070), so ties of question_order
  * among the other questions are gone before the neighbour's order is read.
  */
-async function placeQuestion(
+export async function placeQuestion(
   rpc: RpcClient,
   place: { surveyId: number; groupId: number; qid: number; code: string; target: number; before: readonly OutlineQuestion[]; takenCodes: ReadonlySet<string> },
 ): Promise<void> {
@@ -398,7 +398,7 @@ const REFUSAL_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether an answer of import_question or import_group is a refusal that comes before anything is created. */
-function isRefusal(answer: JsonValue | undefined): boolean {
+export function isRefusal(answer: JsonValue | undefined): boolean {
   const row = objectOf(answer);
   if (!row || "errors" in row || typeof row.status !== "string") return false;
   if ("error_code" in row) return typeof row.error_code === "string" && REFUSAL_CODES.has(row.error_code);
@@ -556,7 +556,7 @@ function addFailed(kind: Kind, step: string, value: unknown, rollback: Rollback,
 // ---------------------------------------------------------------- reading back
 
 /** Differences relative to the element: "groups[0].questions[0].text.de" becomes "text.de". */
-function relativeTo(prefix: string, label: string, differences: SpecDifference[]): SpecDifference[] {
+export function relativeTo(prefix: string, label: string, differences: SpecDifference[]): SpecDifference[] {
   return differences.map((item) => ({
     ...item,
     path: item.path === prefix ? label : item.path.startsWith(`${prefix}.`) ? item.path.slice(prefix.length + 1) : item.path,

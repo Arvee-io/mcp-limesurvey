@@ -12,9 +12,10 @@ export function scopeAllows(current: WriteScope, required: WriteScope): boolean 
 /**
  * Minimum write scope per full MCP tool name. This table is the single source of truth: the server
  * and the workflow/theme tools all enforce through assertWriteScope(), and a tool missing here is
- * treated as "outreach" (fail closed). One argument-dependent exception lives in requiredWriteScope():
+ * treated as "outreach" (fail closed). The argument-dependent exceptions live in requiredWriteScope():
  * limesurvey_import_survey with import_data_type "lsa" needs "outreach" (a .lsa activates the survey and
- * imports participants and responses), and limesurvey_invite_participants with dry_run=true needs only "none".
+ * imports participants and responses), and limesurvey_invite_participants, limesurvey_update_question_from_spec and
+ * limesurvey_update_survey_texts with dry_run=true need only "none".
  *
  * - none: reads, session handling, and local-only tools (theme generation/validation, *_to_file exports).
  * - content: creates or changes survey content (structure, texts, quotas, theme assignment).
@@ -95,6 +96,10 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   // Add one question or group to an inactive survey; the rollback deletes only the question or group the call imported.
   limesurvey_add_question_from_spec: "content",
   limesurvey_add_group_from_spec: "content",
+  // Change one question to an end state (texts, columns, or a replacement that deletes exactly the old question after
+  // the new one was read back) and change texts by code. With dry_run=true both only read (requiredWriteScope).
+  limesurvey_update_question_from_spec: "content",
+  limesurvey_update_survey_texts: "content",
 
   // lifecycle
   limesurvey_activate_survey: "lifecycle",
@@ -143,6 +148,9 @@ export function requiredWriteScope(toolName: string, input?: Record<string, unkn
   }
   // A dry run only reads the participant list and never calls invite_participants.
   if (toolName === "limesurvey_invite_participants" && input?.dry_run === true) return "none";
+  // A dry run of the update tools only reads the survey (their client then allows read methods only).
+  if (toolName === "limesurvey_update_question_from_spec" && input?.dry_run === true) return "none";
+  if (toolName === "limesurvey_update_survey_texts" && input?.dry_run === true) return "none";
   return TOOL_WRITE_SCOPES[toolName] ?? "outreach";
 }
 
