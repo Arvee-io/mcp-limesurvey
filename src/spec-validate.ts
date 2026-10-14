@@ -24,6 +24,7 @@ import {
   SUBQUESTION_CODE_PATTERN,
   SUBQUESTION_KEYS,
   SUPPORTED_TYPES,
+  CORE_THEME,
   SURVEY_BOOLEAN_KEYS,
   SURVEY_DEFAULTS,
   SURVEY_FORMATS,
@@ -38,7 +39,22 @@ import {
   unescapeStrings,
   type SpecKind,
 } from "./spec-model.js";
-import { I18N_ATTRIBUTES } from "./attribute-defaults.js";
+import { ATTRIBUTE_NAMES, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "./attribute-defaults.js";
+
+/** The attribute names per question theme (core and extended themes of LimeSurvey 6 and 7). */
+const THEME_ATTRIBUTES: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries(ATTRIBUTE_NAMES).map(([theme, names]) => [theme, new Set(names)]),
+);
+/** Every attribute name some theme defines; a name outside it (a plugin attribute) is not held to a theme. */
+const THEME_ATTRIBUTE_NAMES: ReadonlySet<string> = new Set(Object.values(ATTRIBUTE_NAMES).flat());
+
+/** The theme whose attributes a question uses: question_theme_name, or (none or core) the base theme of the type. */
+function themeOfQuestion(question: Record<string, unknown>): string | undefined {
+  const theme = typeof question.question_theme_name === "string" ? question.question_theme_name.trim() : "";
+  if (theme !== "" && theme !== CORE_THEME) return theme;
+  const type = typeof question.type === "string" ? question.type : "";
+  return Object.hasOwn(BASE_THEME_BY_TYPE, type) ? BASE_THEME_BY_TYPE[type] : undefined;
+}
 
 export type SpecFinding = { path: string; message: string; fix: string };
 export type SpecWarning = { path: string; message: string };
@@ -508,12 +524,18 @@ function validateSubquestions(findings: Findings, path: string, subquestions: un
   });
 }
 
-function validateAttributes(findings: Findings, path: string, attributes: unknown, scope: Scope): void {
+function validateAttributes(findings: Findings, path: string, attributes: unknown, scope: Scope, question: Record<string, unknown>): void {
   if (attributes === undefined || attributes === null) return;
   if (!isRecord(attributes)) {
     findings.error(path, `attributes must be an object, got ${describeValue(attributes)}.`, 'Use { "attribute_name": "value" }.');
     return;
   }
+  // An attribute some theme defines but the theme of this question does not: LimeSurvey does not use it, and the import
+  // does not keep it. A theme the tables do not know (a custom theme) and plugin attributes are not checked.
+  const theme = themeOfQuestion(question);
+  const themeAttributes = theme === undefined ? undefined : THEME_ATTRIBUTES.get(theme);
+  const type = typeof question.type === "string" ? question.type : "";
+  const extended = theme !== undefined && theme !== BASE_THEME_BY_TYPE[type];
   for (const [name, value] of Object.entries(attributes)) {
     const attributePath = keyPath(path, name);
     if (!ATTRIBUTE_NAME_PATTERN.test(name)) {
@@ -521,6 +543,13 @@ function validateAttributes(findings: Findings, path: string, attributes: unknow
         attributePath,
         `The attribute name ${JSON.stringify(name)} is invalid.`,
         "Use 1-50 characters: a letter first, then letters, digits or underscores (for example display_columns).",
+      );
+    } else if (themeAttributes !== undefined && THEME_ATTRIBUTE_NAMES.has(name) && !themeAttributes.has(name)) {
+      const user = extended ? `the question theme ${theme ?? ""} (type ${type})` : `type ${type}`;
+      findings.error(
+        attributePath,
+        `The attribute ${name} is not defined for ${user}: LimeSurvey does not use it for this question and does not keep it.`,
+        `${user.charAt(0).toUpperCase()}${user.slice(1)} does not use ${name}; remove it${extended ? "" : " (or use a question theme that defines it)"}.`,
       );
     }
     if (isRecord(value)) {
@@ -591,7 +620,7 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
   }
   checkBoolean(findings, keyPath(path, "other"), question.other);
   for (const name of ["encrypted", "same_default", "same_script"] as const) checkBoolean(findings, keyPath(path, name), question[name]);
-  validateAttributes(findings, keyPath(path, "attributes"), question.attributes, scope);
+  validateAttributes(findings, keyPath(path, "attributes"), question.attributes, scope, question);
   const sameDefault = question.same_default === true;
   checkDefault(findings, keyPath(path, "default"), question.default, scope, sameDefault);
   checkDefault(findings, keyPath(path, "default_other"), question.default_other, scope, sameDefault);

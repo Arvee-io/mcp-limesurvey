@@ -98,6 +98,19 @@ for (const theme of themes) {
   table[theme] = entries;
 }
 
+// The names of the attributes a theme defines in either version, whatever their default (the defaults table above leaves
+// out names whose default differs). The spec check uses them: an attribute some theme defines but the theme of the
+// question does not is not used by that question.
+const names = {};
+let nameCount = 0;
+for (const theme of themes) {
+  const a = v6.effective[theme] ?? {};
+  const b = v7.effective[theme] ?? {};
+  names[theme] = [...new Set([...Object.keys(HIDDEN_ATTRIBUTES), ...Object.keys(a), ...Object.keys(b)])].sort();
+  nameCount += names[theme].length;
+}
+const distinctNames = new Set(Object.values(names).flat()).size;
+
 const types = [...new Set([...Object.keys(v6.baseThemeByType), ...Object.keys(v7.baseThemeByType)])].sort();
 const baseThemes = {};
 for (const type of types) {
@@ -127,5 +140,15 @@ const lines = [
 ];
 for (const theme of themes) lines.push(`  ${q(theme)}: ${q(table[theme])},`);
 lines.push("};", "");
+lines.push(
+  "/**",
+  " * Names of the attributes each question theme defines in LimeSurvey 6 or 7 (the union, whatever the default; image",
+  " * included). An attribute that some theme defines but the theme of a question does not is not used by that question.",
+  " */",
+  "export const ATTRIBUTE_NAMES: Readonly<Record<string, readonly string[]>> = {",
+);
+for (const theme of themes) lines.push(`  ${q(theme)}: ${q(names[theme])},`);
+lines.push("};", "");
 await writeFile(output, lines.join("\n"), "utf8");
-console.log(`themes=${themes.length} types=${types.length} i18n=${i18n.length} version-dependent defaults left out=${dropped}`);
+console.log(`themes=${themes.length} types=${types.length} i18n=${i18n.length} version-dependent defaults left out=${dropped} `
+  + `attribute names=${nameCount} distinct names=${distinctNames}`);

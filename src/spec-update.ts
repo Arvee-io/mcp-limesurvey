@@ -605,12 +605,35 @@ function textWrites(input: {
   return writes;
 }
 
-/** questionl10ns writes answer with questionl10ns: true; a false or a message is a failure. */
+/**
+ * What an L10n write did not save. LimeSurvey answers questionl10ns / questiongroupl10ns per language and field with the
+ * result of save(), for example { "de": { "question": true, "help": true } }; false for a language (a missing row could
+ * not be created) and the text "Empty question L10n data" / "Empty group L10n data" (no valid field) are failures, as is
+ * false for a field (7.5.1 remotecontrol_handle.php:1430-1464 and 1991-2031, 6.17.11 :1363-1406 and 1908-1950). Returns
+ * the languages and fields that were sent but not saved.
+ */
+export function l10nNotSaved(answer: JsonObject | undefined, key: string, sent: JsonObject): string[] {
+  const saved = objectOf(answer?.[key]);
+  const missing: string[] = [];
+  for (const [language, fields] of Object.entries(sent)) {
+    const entry = saved?.[language];
+    if (!isRecord(entry)) {
+      missing.push(`${language}: ${JSON.stringify(entry ?? null)}`);
+      continue;
+    }
+    for (const field of Object.keys(objectOf(fields) ?? {})) {
+      if (entry[field] !== true) missing.push(`${language}.${field}: ${JSON.stringify(entry[field] ?? null)}`);
+    }
+  }
+  return missing;
+}
+
+/** A questionl10ns write; any language or field it did not save makes it a failure. */
 async function writeTexts(rpc: RpcClient, qid: number, data: JsonObject): Promise<void> {
   const answer = objectOf(await rpc.call("set_question_properties", [qid, data]));
-  const saved = answer?.questionl10ns;
-  if (saved !== undefined && saved !== true) {
-    throw new LimeSurveyError(`set_question_properties did not save the texts of ${qid}: ${JSON.stringify(saved)}`, "FIELD_SAVE_FAILED", answer ?? null);
+  const missing = l10nNotSaved(answer, "questionl10ns", objectOf(data.questionl10ns) ?? {});
+  if (missing.length > 0) {
+    throw new LimeSurveyError(`set_question_properties did not save the texts of ${qid} (${missing.join(", ")}).`, "FIELD_SAVE_FAILED", answer ?? null);
   }
 }
 
@@ -1143,17 +1166,19 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
       columnUndo[property] = stored[property] ?? "";
     }
   }
+  // Each undo is registered before its write: a write that fails may have saved a part (LimeSurvey saves field by
+  // field), so the failed write is reset as well, with the stored values of the fields it sent.
   const undo: Array<() => Promise<void>> = [];
   let step = "columns";
   try {
     if (columns.length > 0) {
-      await setQuestion(rpc, questionId, columnData);
       undo.push(() => setQuestion(rpc, questionId, columnUndo));
+      await setQuestion(rpc, questionId, columnData);
     }
     step = "texts";
     for (const write of texts) {
-      await writeTexts(rpc, write.qid, write.data);
       undo.push(() => writeTexts(rpc, write.qid, write.undo));
+      await writeTexts(rpc, write.qid, write.data);
     }
   } catch (value) {
     const manualCleanup: JsonObject[] = [];
@@ -1528,9 +1553,10 @@ export async function updateSurveyTexts(context: UpdateContext, input: SurveyTex
   const send = async (method: Write["method"], params: JsonValue[], fields: string[]): Promise<void> => {
     const answer = objectOf(await rpc.call(method, params));
     const key = method === "set_group_properties" ? "questiongroupl10ns" : method === "set_question_properties" ? "questionl10ns" : undefined;
+    // set_language_properties answers each field with true; the L10n writes answer per language and field.
     const failed = [
       ...fields.filter((field) => answer?.[field] !== true),
-      ...(key !== undefined && answer?.[key] !== undefined && answer[key] !== true ? [key] : []),
+      ...(key !== undefined ? l10nNotSaved(answer, key, objectOf(objectOf(params[1])?.[key]) ?? {}) : []),
     ];
     if (failed.length > 0) {
       throw new LimeSurveyError(`${method} did not save ${failed.join(", ")}: ${JSON.stringify(answer ?? null)}`, "FIELD_SAVE_FAILED", answer ?? null);
