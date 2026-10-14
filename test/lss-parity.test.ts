@@ -5,6 +5,7 @@ import test from "node:test";
 import { XMLParser } from "fast-xml-parser";
 import { I18N_ATTRIBUTES } from "../src/attribute-defaults.js";
 import { generateSurveyLss } from "../src/spec-generate.js";
+import { validateSpec } from "../src/spec-validate.js";
 import { parseStructureFile } from "./helpers/add-tools.js";
 
 /**
@@ -177,5 +178,12 @@ for (const item of manifest.cases.filter((entry) => !entry.lss)) {
       lss = generateSurveyLss(spec);
     }, `the generator accepts ${item.spec}`);
     assertStructure(spec, lss, item.types);
+  });
+
+  test(`[GEN-PARITY] [GEN-TYPES] ${item.spec} (no Python reference) is a valid survey spec for validate_spec`, async () => {
+    const spec = JSON.parse(await readFile(path.join(root, item.spec), "utf8")) as unknown;
+    const result = validateSpec("survey", spec);
+    assert.equal(result.valid, true, JSON.stringify(result.errors));
+    assert.deepEqual(result.errors, []);
   });
 }
