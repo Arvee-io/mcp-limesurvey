@@ -1,0 +1,56 @@
+{
+  "survey": {
+    "title": "Seminarfeedback Führungstraining",
+    "anonymized": true,
+    "welcometext": "Vielen Dank, dass Sie sich kurz Zeit nehmen. Ihre Antworten werden anonym ausgewertet."
+  },
+  "groups": [
+    {
+      "title": "Inhalt und Relevanz",
+      "questions": [
+        {
+          "code": "A01",
+          "type": "F",
+          "text": "Wie bewerten Sie die folgenden Aspekte des Seminars?",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Klarheit der Seminarziele"
+            },
+            {
+              "code": "SQ002",
+              "text": "Praxisnähe der Inhalte"
+            }
+          ],
+          "answers": [
+            {
+              "code": "1",
+              "text": "sehr schlecht",
+              "assessment_value": 1
+            },
+            {
+              "code": "2",
+              "text": "eher schlecht",
+              "assessment_value": 2
+            },
+            {
+              "code": "3",
+              "text": "mittelmäßig",
+              "assessment_value": 3
+            },
+            {
+              "code": "4",
+              "text": "eher gut",
+              "assessment_value": 4
+            },
+            {
+              "code": "5",
+              "text": "sehr gut",
+              "assessment_value": 5
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

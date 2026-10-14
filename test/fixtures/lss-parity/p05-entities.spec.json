@@ -1,0 +1,39 @@
+{
+  "survey": {
+    "title": "Gr&ouml;&szlig;e und Stra&szlig;e",
+    "language": "de"
+  },
+  "groups": [
+    {
+      "title": "&bdquo;Zitat&ldquo; &ndash; Gruppe",
+      "questions": [
+        {
+          "code": "A01",
+          "type": "X",
+          "text": "&bdquo;Zitat&ldquo; &ndash; mit Gedankenstrich und Ellipse&hellip;"
+        },
+        {
+          "code": "A02",
+          "type": "S",
+          "text": "Gr&ouml;&szlig;e &auml;ndern",
+          "help": "Leerzeichen:&nbsp;geschützt"
+        },
+        {
+          "code": "A03",
+          "type": "!",
+          "text": "„Echte“ Zeichen — und …",
+          "answers": [
+            {
+              "code": "A1",
+              "text": "&Auml;pfel"
+            },
+            {
+              "code": "A2",
+              "text": "Birnen &#8211; reif"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,262 @@
+[
+ {
+  "input": "&auml;",
+  "python": "\u00e4",
+  "safe": "\u00e4"
+ },
+ {
+  "input": "&auml",
+  "python": "\u00e4",
+  "safe": "&auml"
+ },
+ {
+  "input": "&aumlx",
+  "python": "\u00e4x",
+  "safe": "&aumlx"
+ },
+ {
+  "input": "Gr&ouml;&szlig;e",
+  "python": "Gr\u00f6\u00dfe",
+  "safe": "Gr\u00f6\u00dfe"
+ },
+ {
+  "input": "&ampx;",
+  "python": "&x;",
+  "safe": "&ampx;"
+ },
+ {
+  "input": "&#8211;",
+  "python": "\u2013",
+  "safe": "\u2013"
+ },
+ {
+  "input": "&#x2013;",
+  "python": "\u2013",
+  "safe": "\u2013"
+ },
+ {
+  "input": "&#X2013",
+  "python": "\u2013",
+  "safe": "&#X2013"
+ },
+ {
+  "input": "&#128;",
+  "python": "\u20ac",
+  "safe": "\u20ac"
+ },
+ {
+  "input": "&#0;",
+  "python": "\ufffd",
+  "safe": "\ufffd"
+ },
+ {
+  "input": "&#xD800;",
+  "python": "\ufffd",
+  "safe": "\ufffd"
+ },
+ {
+  "input": "&#x110000;",
+  "python": "\ufffd",
+  "safe": "\ufffd"
+ },
+ {
+  "input": "&#1;",
+  "python": "",
+  "safe": "&#1;"
+ },
+ {
+  "input": "&#x7f;",
+  "python": "",
+  "safe": "&#x7f;"
+ },
+ {
+  "input": "&#x80;",
+  "python": "\u20ac",
+  "safe": "\u20ac"
+ },
+ {
+  "input": "&#x9F;",
+  "python": "\u0178",
+  "safe": "\u0178"
+ },
+ {
+  "input": "&notit;",
+  "python": "\u00acit;",
+  "safe": "&notit;"
+ },
+ {
+  "input": "&notin;",
+  "python": "\u2209",
+  "safe": "\u2209"
+ },
+ {
+  "input": "&nbsp;",
+  "python": "\u00a0",
+  "safe": "\u00a0"
+ },
+ {
+  "input": "&NotANamedEntity;",
+  "python": "&NotANamedEntity;",
+  "safe": "&NotANamedEntity;"
+ },
+ {
+  "input": "&",
+  "python": "&",
+  "safe": "&"
+ },
+ {
+  "input": "& &;",
+  "python": "& &;",
+  "safe": "& &;"
+ },
+ {
+  "input": "&#;",
+  "python": "&#;",
+  "safe": "&#;"
+ },
+ {
+  "input": "&#x;",
+  "python": "&#x;",
+  "safe": "&#x;"
+ },
+ {
+  "input": "&amp;amp;",
+  "python": "&amp;",
+  "safe": "&amp;amp;"
+ },
+ {
+  "input": "a&lt;b",
+  "python": "a<b",
+  "safe": "a&lt;b"
+ },
+ {
+  "input": "&quot;x&quot;",
+  "python": "\"x\"",
+  "safe": "&quot;x&quot;"
+ },
+ {
+  "input": "&apos;",
+  "python": "'",
+  "safe": "&apos;"
+ },
+ {
+  "input": "&#39;",
+  "python": "'",
+  "safe": "&#39;"
+ },
+ {
+  "input": "&#60;",
+  "python": "<",
+  "safe": "&#60;"
+ },
+ {
+  "input": "&#x3C;",
+  "python": "<",
+  "safe": "&#x3C;"
+ },
+ {
+  "input": "&Afr;",
+  "python": "\ud835\udd04",
+  "safe": "\ud835\udd04"
+ },
+ {
+  "input": "&;",
+  "python": "&;",
+  "safe": "&;"
+ },
+ {
+  "input": "&a;",
+  "python": "&a;",
+  "safe": "&a;"
+ },
+ {
+  "input": "&AMP",
+  "python": "&",
+  "safe": "&AMP"
+ },
+ {
+  "input": "&ltx",
+  "python": "<x",
+  "safe": "&ltx"
+ },
+ {
+  "input": "&#65;&#x42;",
+  "python": "AB",
+  "safe": "AB"
+ },
+ {
+  "input": "text without amp",
+  "python": "text without amp",
+  "safe": "text without amp"
+ },
+ {
+  "input": "\ud835\udd04&auml;\ud835\udd04",
+  "python": "\ud835\udd04\u00e4\ud835\udd04",
+  "safe": "\ud835\udd04\u00e4\ud835\udd04"
+ },
+ {
+  "input": "&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;",
+  "python": "&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;",
+  "safe": "&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;"
+ },
+ {
+  "input": "&bdquo;Zitat&ldquo; &ndash; Ellipse&hellip;",
+  "python": "\u201eZitat\u201c \u2013 Ellipse\u2026",
+  "safe": "\u201eZitat\u201c \u2013 Ellipse\u2026"
+ },
+ {
+  "input": "&#0000000065;",
+  "python": "A",
+  "safe": "A"
+ },
+ {
+  "input": "&#x0000041",
+  "python": "A",
+  "safe": "&#x0000041"
+ },
+ {
+  "input": "&copy2026",
+  "python": "\u00a92026",
+  "safe": "&copy2026"
+ },
+ {
+  "input": "&gt",
+  "python": ">",
+  "safe": "&gt"
+ },
+ {
+  "input": "&GT;",
+  "python": ">",
+  "safe": "&GT;"
+ },
+ {
+  "input": "&lt;b&gt;bold&lt;/b&gt;",
+  "python": "<b>bold</b>",
+  "safe": "&lt;b&gt;bold&lt;/b&gt;"
+ },
+ {
+  "input": "&nbsp&nbsp;",
+  "python": "\u00a0\u00a0",
+  "safe": "&nbsp\u00a0"
+ },
+ {
+  "input": "&#8226",
+  "python": "\u2022",
+  "safe": "&#8226"
+ },
+ {
+  "input": "&#xFFFE;",
+  "python": "",
+  "safe": "&#xFFFE;"
+ },
+ {
+  "input": "&#xFDD0;",
+  "python": "",
+  "safe": "&#xFDD0;"
+ },
+ {
+  "input": "&#13;",
+  "python": "\r",
+  "safe": "\r"
+ }
+]

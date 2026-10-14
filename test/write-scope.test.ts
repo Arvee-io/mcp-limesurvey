@@ -280,6 +280,8 @@ const expectedScopes: Record<string, Scope> = {
   limesurvey_assign_survey_theme: "content",
   limesurvey_list_installed_themes: "none",
   limesurvey_replace_question: "content",
+  limesurvey_validate_spec: "none",
+  limesurvey_create_survey_from_spec: "content",
 };
 
 // Minimal valid arguments (including confirmation literals) for every tool above "none".
@@ -324,10 +326,18 @@ const minimalArguments: Record<string, Record<string, unknown>> = {
     import_data_type: "lsq",
     confirm_destructive_action: true,
   },
+  // The generic mock answers import_survey with `true`, so the tool may end with an error after the RPC; the test
+  // only checks that the request reaches the RPC and is not blocked by the write scope.
+  limesurvey_create_survey_from_spec: {
+    spec: {
+      survey: { title: "T" },
+      groups: [{ title: "G", questions: [{ code: "Q01", type: "S", text: "Frage" }] }],
+    },
+  },
 };
 
 test("[S-01] every registered tool is gated by its documented write scope", async () => {
-  assert.equal(Object.keys(expectedScopes).length, 75);
+  assert.equal(Object.keys(expectedScopes).length, 77);
   const writeTools = Object.entries(expectedScopes).filter(([, scope]) => scope !== "none").map(([name]) => name);
   assert.deepEqual(Object.keys(minimalArguments).sort(), [...writeTools].sort());
 

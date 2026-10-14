@@ -1,0 +1,252 @@
+{
+  "survey": {
+    "title": "Mitarbeiterbefragung Führungskräfte 2026",
+    "language": "de",
+    "description": "Jährliche Befragung zur Zusammenarbeit.",
+    "welcometext": "Schön, dass Sie dabei sind! Die Befragung dauert ungefähr 10 Minuten.",
+    "endtext": "Vielen Dank für Ihre Rückmeldung!",
+    "anonymized": true,
+    "datestamp": false,
+    "ipaddr": false,
+    "savetimings": false,
+    "format": "G",
+    "showprogress": true
+  },
+  "groups": [
+    {
+      "title": "Block A — Allgemeines",
+      "description": "Einstieg und Rahmenbedingungen",
+      "relevance": "1",
+      "questions": [
+        {
+          "code": "A00",
+          "type": "X",
+          "text": "Willkommen! Zunächst einige allgemeine Fragen."
+        },
+        {
+          "code": "A01",
+          "type": "L",
+          "text": "Wie zufrieden sind Sie mit Ihrer Arbeitssituation insgesamt?",
+          "mandatory": true,
+          "answers": [
+            {
+              "code": "AO01",
+              "text": "überhaupt nicht zufrieden"
+            },
+            {
+              "code": "AO02",
+              "text": "eher nicht zufrieden"
+            },
+            {
+              "code": "AO03",
+              "text": "teils/teils"
+            },
+            {
+              "code": "AO04",
+              "text": "eher zufrieden"
+            },
+            {
+              "code": "AO05",
+              "text": "sehr zufrieden"
+            }
+          ]
+        },
+        {
+          "code": "A02",
+          "type": "!",
+          "text": "In welchem Bereich arbeiten Sie überwiegend?",
+          "answers": [
+            {
+              "code": "B1",
+              "text": "Beratung"
+            },
+            {
+              "code": "B2",
+              "text": "Verwaltung"
+            },
+            {
+              "code": "B3",
+              "text": "Geschäftsführung"
+            }
+          ]
+        },
+        {
+          "code": "A03",
+          "type": "O",
+          "text": "Wie bewerten Sie die interne Kommunikation?",
+          "help": "Ergänzen Sie Ihre Bewertung gern im Kommentarfeld.",
+          "answers": [
+            {
+              "code": "K1",
+              "text": "sehr schlecht"
+            },
+            {
+              "code": "K2",
+              "text": "eher schlecht"
+            },
+            {
+              "code": "K3",
+              "text": "mittelmäßig"
+            },
+            {
+              "code": "K4",
+              "text": "eher gut"
+            },
+            {
+              "code": "K5",
+              "text": "sehr gut"
+            }
+          ]
+        },
+        {
+          "code": "A04",
+          "type": "M",
+          "text": "Welche Angebote haben Sie im letzten Jahr genutzt?",
+          "other": true,
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Weiterbildung für Führungskräfte"
+            },
+            {
+              "code": "SQ002",
+              "text": "Gesundheitsangebote"
+            },
+            {
+              "code": "SQ003",
+              "text": "Mobiles Arbeiten"
+            }
+          ]
+        },
+        {
+          "code": "A05",
+          "type": "Y",
+          "text": "Haben Sie regelmäßig Kundenkontakt?"
+        },
+        {
+          "code": "A06",
+          "type": "N",
+          "text": "Wie viele Kundentermine hatten Sie im letzten Monat?",
+          "relevance": "((A05.NAOK == \"Y\"))",
+          "attributes": {
+            "min_num_value_n": "0",
+            "max_num_value_n": "200"
+          }
+        }
+      ]
+    },
+    {
+      "title": "Block B — Details",
+      "description": "",
+      "relevance": "1",
+      "questions": [
+        {
+          "code": "B01",
+          "type": "S",
+          "text": "Welche drei Wörter beschreiben die Zusammenarbeit am besten?"
+        },
+        {
+          "code": "B02",
+          "type": "T",
+          "text": "Was sollten wir aus Ihrer Sicht verbessern?"
+        },
+        {
+          "code": "B03",
+          "type": "Q",
+          "text": "Nennen Sie je ein Beispiel:",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Was läuft gut?"
+            },
+            {
+              "code": "SQ002",
+              "text": "Was läuft schlecht?"
+            }
+          ]
+        },
+        {
+          "code": "B04",
+          "type": "5",
+          "text": "Wie bewerten Sie das Onboarding insgesamt?"
+        },
+        {
+          "code": "B05",
+          "type": "F",
+          "text": "Wie zufrieden sind Sie mit den folgenden Aspekten?",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Führungskräfte-Feedback"
+            },
+            {
+              "code": "SQ002",
+              "text": "Teamarbeit und Unterstützung"
+            }
+          ],
+          "answers": [
+            {
+              "code": "A1",
+              "text": "überhaupt nicht zufrieden",
+              "assessment_value": 1
+            },
+            {
+              "code": "A2",
+              "text": "eher nicht zufrieden",
+              "assessment_value": 2
+            },
+            {
+              "code": "A3",
+              "text": "teils/teils",
+              "assessment_value": 3
+            },
+            {
+              "code": "A4",
+              "text": "eher zufrieden",
+              "assessment_value": 4
+            },
+            {
+              "code": "A5",
+              "text": "sehr zufrieden",
+              "assessment_value": 5
+            }
+          ]
+        },
+        {
+          "code": "B06",
+          "type": "A",
+          "text": "Wie schätzen Sie die folgenden Aussagen ein?",
+          "subquestions": [
+            {
+              "code": "SQ001",
+              "text": "Meine Aufgaben sind klar definiert."
+            },
+            {
+              "code": "SQ002",
+              "text": "Ich kann Prioritäten selbst setzen."
+            }
+          ]
+        },
+        {
+          "code": "B07",
+          "type": "R",
+          "text": "Bitte ordnen Sie die Themen nach Wichtigkeit:",
+          "answers": [
+            {
+              "code": "R1",
+              "text": "Vergütung"
+            },
+            {
+              "code": "R2",
+              "text": "Flexibilität"
+            },
+            {
+              "code": "R3",
+              "text": "Weiterbildung"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

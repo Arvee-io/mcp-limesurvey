@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Surveys from a JSON description (spec), without any local file:
+  `limesurvey_validate_spec` (write scope `none`) checks a survey, group, or
+  question description and reports every problem with `path`, `message`, and
+  `fix`; with `survey_id` it also checks against the live survey using read
+  methods only. `limesurvey_create_survey_from_spec` (`content`) generates the
+  `.lss` in memory, imports it, reads the survey back, and reports the
+  differences in `verification`. Based on user feedback.
+- The `.lss` generator is a byte-for-byte port of the Python generator of the
+  `limesurvey` Claude Code plugin (`test/fixtures/lss-parity` holds the reference
+  cases for all 26 question types it supports).
+- `tools/build-attribute-defaults.mjs` and `tools/build-html-entities.py` generate
+  the attribute default table and the HTML entity table (not part of the package).
+
+### Changed
+
+- Compared with the Python generator, the validation is stricter where LimeSurvey
+  would otherwise change or drop data silently: answer codes have at most five
+  characters, question codes must not be reserved words and are unique without
+  regard to case, language codes and XML control characters are checked, and
+  embedded `data:` URIs are rejected. HTML entities that stand for markup
+  characters, or that lack the closing semicolon, are no longer decoded.
+
 ## [1.5.1] - 2026-10-14
 
 ### Fixed
