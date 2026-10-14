@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-10-14
+
+### Fixed
+
+- LimeSurvey 7 compatibility: LimeSurvey 7.x answers an empty list with
+  `{"status": "No ... found", "error_code": "ERR_NO_DATA"}`. The `list_*` tools
+  (and the workflow tools built on them, such as `find_surveys`,
+  `get_instance_info` with `probe_instance=true`, `validate_participants` and the
+  `invite_participants` dry run) now return `[]` for this answer as they already
+  did for the LimeSurvey 6 form without `error_code`. Found in a live run against
+  LimeSurvey 7.5.1.
+
 ## [1.5.0] - 2026-10-12
 
 This release has 75 tools (two new: `verify_survey_against_lss` and

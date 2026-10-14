@@ -54,8 +54,8 @@ function structuredErrorMessage(value: JsonValue | undefined): string | undefine
 /**
  * The statuses LimeSurvey 6.17.11 returns instead of [] when a list_* method finds nothing (RemoteControl handle:
  * list_surveys, list_survey_groups, list_users, list_groups, list_questions, list_quotas, list_participants).
- * Only these exact texts of exactly these methods count; "Error: No survey participant list" (no participant
- * table) and every other status stay errors.
+ * LimeSurvey 7 adds error_code "ERR_NO_DATA" to the same answer. Only these exact texts of exactly these methods
+ * count; "Error: No survey participant list" (no participant table) and every other status stay errors.
  */
 const EMPTY_LIST_STATUS: Readonly<Record<string, string>> = {
   list_surveys: "no surveys found",
@@ -69,10 +69,11 @@ const EMPTY_LIST_STATUS: Readonly<Record<string, string>> = {
 
 function isEmptyListAnswer(method: string, value: JsonValue): boolean {
   const expected = EMPTY_LIST_STATUS[method];
-  return expected !== undefined
-    && isObject(value)
-    && Object.keys(value).length === 1
-    && statusMessage(value)?.trim().toLowerCase() === expected;
+  if (expected === undefined || !isObject(value)) return false;
+  const keys = Object.keys(value);
+  const shapeMatches = keys.length === 1
+    || (keys.length === 2 && "error_code" in value && errorCode(value) === "ERR_NO_DATA");
+  return shapeMatches && statusMessage(value)?.trim().toLowerCase() === expected;
 }
 
 function hasApiError(value: JsonValue | undefined): boolean {

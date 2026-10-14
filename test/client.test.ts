@@ -89,6 +89,39 @@ test("[S-03] renews the session when set_quota_properties reports an invalid key
   assert.deepEqual(methods, ["get_session_key", "set_quota_properties", "get_session_key", "set_quota_properties"]);
 });
 
+test("[S-03] LimeSurvey 7 empty-list answers with error_code ERR_NO_DATA become an empty array", async () => {
+  const answers: Record<string, unknown> = {
+    list_surveys: { status: "No surveys found", error_code: "ERR_NO_DATA" },
+    list_groups: { status: "No groups found", error_code: "ERR_NO_DATA" },
+    list_questions: { status: "No questions found", error_code: "ERR_NO_DATA" },
+    list_quotas: { status: "No quotas found", error_code: "ERR_NO_DATA" },
+    list_participants: { status: "No survey participants found.", error_code: "ERR_NO_DATA" },
+  };
+  const mockFetch: typeof fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
+    if (request.method === "get_session_key") return jsonResponse(request.id, "session-1");
+    return jsonResponse(request.id, answers[request.method]);
+  };
+  const client = new LimeSurveyClient(config, mockFetch);
+
+  for (const method of Object.keys(answers)) {
+    assert.deepEqual(await client.call(method, [123]), [], method);
+  }
+});
+
+test("[S-03] an ERR_NO_DATA answer with another status or another error code stays an error", async () => {
+  const mockFetch: typeof fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
+    if (request.method === "get_session_key") return jsonResponse(request.id, "session-1");
+    if (request.method === "list_groups") return jsonResponse(request.id, { status: "No groups found", error_code: "ERR_INVALID_SURVEY" });
+    return jsonResponse(request.id, { status: "Error: No survey participant list", error_code: "ERR_NO_DATA" });
+  };
+  const client = new LimeSurveyClient(config, mockFetch);
+
+  await assert.rejects(client.call("list_groups", [123]), /list_groups failed/);
+  await assert.rejects(client.call("list_participants", [123]), /list_participants failed/);
+});
+
 test("returns a sanitized connection status instead of the session key", async () => {
   const mockFetch: typeof fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
