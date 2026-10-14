@@ -8,16 +8,18 @@
 
 A production-oriented [Model Context Protocol](https://modelcontextprotocol.io/)
 server for the [LimeSurvey RemoteControl 2 API](https://www.limesurvey.org/manual/RemoteControl_2_API).
-It exposes all 56 documented RemoteControl methods plus 17 guarded workflow tools
-for discovery, participants, exports, capability detection, and responsive
-survey themes.
+It exposes all 56 documented RemoteControl methods plus guarded workflow tools
+for discovery, participants, exports, capability detection, building surveys from a
+JSON description, and responsive survey themes.
 
 This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 
 ## Features
 
 - **Complete RemoteControl coverage:** all 56 documented JSON-RPC methods
-- **75 MCP tools:** official methods plus focused workflow and theme tools
+- **77 MCP tools:** official methods plus focused workflow, survey description, and theme tools
+- **Surveys from a description:** validate a JSON survey description and create the survey
+  from it without any local file, then read it back and compare
 - **Modern MCP contracts:** strict Zod schemas, structured output, and annotations
 - **Safe write access:** server-enforced write scopes (`none`, `content`, `lifecycle`,
   outreach), a legacy read-only switch, and explicit confirmations
@@ -34,8 +36,9 @@ This community project is not affiliated with or endorsed by LimeSurvey GmbH.
 |---|---|---:|
 | Official RemoteControl 2 API | Sessions, settings, surveys, languages, groups, questions, participants, quotas, users, responses, files, exports | 56 |
 | Workflow helpers | Survey search, language normalization, participant helpers, export format discovery, secure file exports, experimental survey-structure export, capability/instance info, participant table status, participant validation, survey-vs-.lss verification, question replacement | 14 |
+| Survey descriptions (spec) | Validate a description, create a survey from it | 2 |
 | Survey themes | Generate, validate, publication guide, assign to survey, best-effort theme listing | 5 |
-| **Total** | | **75** |
+| **Total** | | **77** |
 
 Official tools are named `limesurvey_<remotecontrol_method>`. Run the MCP
 Inspector to view every current schema:
@@ -227,12 +230,12 @@ around a block by calling the RemoteControl API directly.
 
 | Write scope | Tools |
 |---|---|
-| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_verify_survey_against_lss`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
-| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question` |
+| `none` (allowed under every scope) | `limesurvey_get_session_key`, `limesurvey_release_session_key`, `limesurvey_get_available_site_settings`, `limesurvey_get_site_settings`, `limesurvey_get_survey_properties`, `limesurvey_export_statistics`, `limesurvey_export_timeline`, `limesurvey_get_summary`, `limesurvey_get_language_properties`, `limesurvey_get_group_properties`, `limesurvey_get_question_properties`, `limesurvey_get_participant_properties`, `limesurvey_list_participants`, `limesurvey_list_groups`, `limesurvey_list_questions`, `limesurvey_list_quotas`, `limesurvey_get_quota_properties`, `limesurvey_list_surveys`, `limesurvey_list_survey_groups`, `limesurvey_list_users`, `limesurvey_export_responses`, `limesurvey_export_responses_by_token`, `limesurvey_get_response_ids`, `limesurvey_get_uploaded_files`, `limesurvey_get_fieldmap`, `limesurvey_find_surveys`, `limesurvey_get_survey_languages`, `limesurvey_list_filtered_participants`, `limesurvey_get_participant_table_status`, `limesurvey_validate_participants`, `limesurvey_list_response_export_formats`, `limesurvey_get_instance_info`, `limesurvey_list_installed_themes`, `limesurvey_validate_spec`; local-only tools that read the instance and write only into their configured directory: `limesurvey_export_responses_to_file`, `limesurvey_export_responses_by_token_to_file`, `limesurvey_export_statistics_to_file`, `limesurvey_export_survey_to_file`, `limesurvey_verify_survey_against_lss`, `limesurvey_generate_survey_theme`, `limesurvey_validate_survey_theme`, `limesurvey_get_theme_publication_guide` |
+| `content` | `limesurvey_import_survey`, `limesurvey_import_group`, `limesurvey_import_question`, `limesurvey_add_survey`, `limesurvey_copy_survey`, `limesurvey_add_group`, `limesurvey_add_language`, `limesurvey_add_quota`, `limesurvey_set_survey_properties`, `limesurvey_set_language_properties`, `limesurvey_set_group_properties`, `limesurvey_set_question_properties`, `limesurvey_set_quota_properties`, `limesurvey_assign_survey_theme`, `limesurvey_replace_question`, `limesurvey_create_survey_from_spec` |
 | `lifecycle` | `limesurvey_activate_survey`, `limesurvey_activate_tokens`, `limesurvey_delete_survey`, `limesurvey_delete_group`, `limesurvey_delete_question`, `limesurvey_delete_language`, `limesurvey_delete_quota` |
 | `outreach` | `limesurvey_add_participant`, `limesurvey_add_participants`, `limesurvey_set_participant_properties`, `limesurvey_delete_participants`, `limesurvey_invite_participants`, `limesurvey_remind_participants`, `limesurvey_mail_registered_participants`, `limesurvey_cpd_importParticipants`, `limesurvey_add_response`, `limesurvey_update_response`, `limesurvey_delete_response`, `limesurvey_upload_file` |
 
-All 74 tools are listed (41 + 15 + 7 + 12). A tool that is missing from the
+All 77 tools are listed (42 + 16 + 7 + 12). A tool that is missing from the
 server's scope table is treated as `outreach`. Two calls are argument-dependent:
 `limesurvey_import_survey` with `import_data_type=lsa` requires `outreach`,
 because a `.lsa` archive activates the survey and imports participants and
@@ -389,6 +392,81 @@ there are too many issues, `issues` and `borderline` are cut to fit and marked
 with `issues_truncated`, `issues_total`, `issues_returned` and a
 `truncation_note`; `counts_by_code`, `participant_count` and `time_basis` are
 always complete.
+
+## Building Surveys from a Description
+
+The spec tools build and check surveys from a JSON description (the *spec*), so no
+`.lss` file has to be written or uploaded. The description goes in as a tool
+argument and comes back as a tool result; none of these tools needs a local file
+path, which keeps them usable from remote MCP clients.
+
+| Tool | Write scope | Purpose |
+|---|---|---|
+| `limesurvey_validate_spec` | `none` | Checks a survey, group, or question description and reports every problem at once with `path` (for example `groups[1].questions[3].answers[0].code`), `message`, and `fix`. With `survey_id` it also reads the target survey (read methods only) and checks codes and languages against it. |
+| `limesurvey_create_survey_from_spec` | `content` | Validates the description before any request, generates the `.lss` in memory, imports it with `import_survey`, reads the new survey back, and reports `verification { ok, differences, differences_total, truncated }`. |
+
+### Spec format
+
+```json
+{
+  "survey": {
+    "title": "Seminar feedback",
+    "language": "en",
+    "additional_languages": ["de"],
+    "description": "", "welcometext": "", "endtext": "",
+    "anonymized": true, "datestamp": false, "ipaddr": false, "savetimings": false,
+    "format": "G", "adminemail": "", "showprogress": true,
+    "expires": "2026-12-31", "template": "vanilla", "showqnumcode": "X"
+  },
+  "groups": [
+    {
+      "title": "Content",
+      "description": "",
+      "relevance": "1",
+      "questions": [
+        {
+          "code": "A01", "type": "F", "text": "How do you rate the following aspects?",
+          "help": "", "mandatory": false, "relevance": "1", "other": false,
+          "attributes": {},
+          "subquestions": [{ "code": "SQ001", "text": "Clarity of the goals" }],
+          "answers": [
+            { "code": "1", "text": "poor", "assessment_value": 1 },
+            { "code": "2", "text": "good", "assessment_value": 2 }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+- Question types: `X L ! O M Y N S T Q 5 F A R K B C E H P D G U I * |`.
+  `M Q A K B C E P` need subquestions and no answers; `L ! O R` need answers and no
+  subquestions; `F H` need both; all others need neither. `other` is allowed for
+  `L ! M P` only.
+- Codes: question codes `^[A-Za-z][A-Za-z0-9]*$` (at most 20 characters, unique in
+  the survey without regard to case, not a reserved word such as `SID`);
+  subquestion codes alphanumeric (at most 20, not `time`); answer codes
+  alphanumeric with at most 5 characters (LimeSurvey drops longer codes without a
+  message).
+- `mandatory` is `true`, `false`, or `"soft"`. `expires` is `YYYY-MM-DD HH:MM:SS`
+  or `YYYY-MM-DD` (end of day).
+- Texts may use HTML entities; references that end with `;` and do not stand for
+  `& < > " '` are decoded (`&auml;` becomes `ä`), all others stay as written.
+- Unknown keys, control characters that XML 1.0 forbids, and embedded `data:` URIs
+  (which LimeSurvey removes on save) are rejected with their path.
+- The format is backward compatible with the JSON spec of the `limesurvey` Claude
+  Code plugin's former Python generator; for every valid spec the generated
+  `.lss` is byte-identical (see `test/fixtures/lss-parity`).
+
+### Verification
+
+After the import the survey is read back with read methods only and compared
+with the description. Question attributes are compared without values that equal
+LimeSurvey's default for the question theme (the defaults are generated from the
+theme definitions of LimeSurvey 6.17.11 and 7.5.1 by
+`tools/build-attribute-defaults.mjs`). Differences are reported, not hidden; the
+created survey stays in place (deleting needs the `lifecycle` scope).
 
 ## Responsive Survey Themes
 
@@ -656,11 +734,20 @@ src/
   tool-definitions.ts   56 official RemoteControl tools
   workflow-tools.ts     survey, participant, and export workflows
   theme-tools.ts        theme generator, validator, guide, and assignment
+  spec-tools.ts         survey description (spec) tools
+  spec-generate.ts      .lss generator (port of the plugin's Python generator)
+  spec-validate.ts      spec validation with path, message, and fix
+  spec-read.ts          reads a survey back as a spec (read methods only)
+  spec-compare.ts       spec normal form, differences, fingerprint
+  scoped-client.ts      per-call RemoteControl client limited to the write scope
+  attribute-defaults.ts question attribute defaults (generated, see tools/)
+  html-unescape.ts      HTML entity decoding (port of Python's html.unescape)
   server.ts             MCP registration and central safety enforcement
   http-server.ts        authenticated Streamable HTTP transport
   index.ts              stdio/HTTP entry point
 test/                   mocked unit, protocol, transport, workflow, and theme tests
 scripts/                opt-in guarded live integration test
+tools/                  generators for src/attribute-defaults.ts and src/html-entities.ts (not published)
 docs/                   detailed operational documentation
 ```
 
