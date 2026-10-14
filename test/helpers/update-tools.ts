@@ -73,15 +73,18 @@ export function riskOf(risks: unknown, code: string): Json | undefined {
   return (risks as Json[]).find((item) => item.code === code);
 }
 
-/** The acknowledge value of a risk whose code differs from it (design 9.18: translation_gaps -> fill_translation_gaps). */
-const ACK_OF_RISK: Readonly<Record<string, string>> = { translation_gaps: "fill_translation_gaps" };
+/**
+ * The acknowledge value of a risk whose code differs from it: translation_gaps (design 9.18) and unreadable_texts (review
+ * of PR5) are both confirmed with fill_translation_gaps.
+ */
+const ACK_OF_RISK: Readonly<Record<string, string>> = { translation_gaps: "fill_translation_gaps", unreadable_texts: "fill_translation_gaps" };
 
 /** What a caller confirms after reading a dry run: the acknowledge values of the risks it reports as acknowledgeable. */
 export function acknowledgeable(result: Json): string[] {
   assert.ok(Array.isArray(result.risks), `the result has no risks list: ${JSON.stringify(result).slice(0, 800)}`);
-  return (result.risks as Json[])
+  return [...new Set((result.risks as Json[])
     .filter((item) => item.acknowledgeable === true)
-    .map((item) => ACK_OF_RISK[String(item.code)] ?? String(item.code));
+    .map((item) => ACK_OF_RISK[String(item.code)] ?? String(item.code)))];
 }
 
 /**
@@ -105,6 +108,67 @@ export function failOnCall(fake: FakeLimeSurvey, method: string, call: number, r
     if ((JSON.parse(String(init?.body)) as { method?: unknown }).method === method) {
       count += 1;
       if (count === call) fake.failNext(method, result);
+    }
+    return original(input, init);
+  };
+}
+
+/** The JSON-RPC method and positional parameters of a request body (params[0] is the session key). */
+function bodyOf(init: RequestInit | undefined): { method: unknown; params: unknown[] } {
+  const body = JSON.parse(String(init?.body)) as { method?: unknown; params?: unknown };
+  return { method: body.method, params: Array.isArray(body.params) ? body.params : [] };
+}
+
+/**
+ * The first call of `method` whose parameters match answers `result` instead of running (an Error becomes a JSON-RPC
+ * error). params[0] is the session key, params[1] the first argument. Call it before the session is opened.
+ */
+export function failWhen(fake: FakeLimeSurvey, method: string, match: (params: unknown[]) => boolean, result: unknown): void {
+  const target = fake as unknown as { fetch: typeof fetch };
+  const original = target.fetch;
+  let used = false;
+  target.fetch = async (input, init) => {
+    const body = bodyOf(init);
+    if (!used && body.method === method && match(body.params)) {
+      used = true;
+      fake.failNext(method, result);
+    }
+    return original(input, init);
+  };
+}
+
+/**
+ * The first call of `method` never reaches the fake: the connection fails (fetch throws), so nothing runs and the caller
+ * gets no answer. Call it before the session is opened.
+ */
+export function transportFailureOnce(fake: FakeLimeSurvey, method: string): void {
+  const target = fake as unknown as { fetch: typeof fetch };
+  const original = target.fetch;
+  let used = false;
+  target.fetch = async (input, init) => {
+    if (!used && bodyOf(init).method === method) {
+      used = true;
+      throw new TypeError("fetch failed");
+    }
+    return original(input, init);
+  };
+}
+
+/**
+ * After the first call of `trigger`, the next call of `method` answers `result` instead of running (for example a read
+ * that fails after a write succeeded). Call it before the session is opened.
+ */
+export function failAfter(fake: FakeLimeSurvey, trigger: string, method: string, result: unknown): void {
+  const target = fake as unknown as { fetch: typeof fetch };
+  const original = target.fetch;
+  let armed = false;
+  let used = false;
+  target.fetch = async (input, init) => {
+    const name = bodyOf(init).method;
+    if (name === trigger) armed = true;
+    else if (armed && !used && name === method) {
+      used = true;
+      fake.failNext(method, result);
     }
     return original(input, init);
   };
