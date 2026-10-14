@@ -129,6 +129,9 @@ const QUESTION_BASE_FIELDS = [
 ];
 const GROUP_COLUMNS = ["gid", "sid", "group_order", "randomization_group", "grelevance"];
 const GROUP_BASE_FIELDS = ["group_order", "randomization_group", "grelevance"];
+/** Columns of question_l10ns and group_l10ns: the fields a questionl10ns / questiongroupl10ns entry may carry. */
+const QUESTION_L10N_COLUMNS = ["id", "qid", "question", "help", "script", "language"];
+const GROUP_L10N_COLUMNS = ["id", "gid", "group_name", "description", "language"];
 const SURVEYLS_COLUMNS = [
   "surveyls_survey_id", "surveyls_language", "surveyls_title", "surveyls_description", "surveyls_welcometext",
   "surveyls_endtext", "surveyls_policy_notice", "surveyls_policy_error", "surveyls_policy_notice_label", "surveyls_url",
@@ -796,25 +799,35 @@ export class FakeLimeSurvey {
   private setGroupProperties(params: unknown[]): unknown {
     const group = this.groupOf(params[1]);
     if (!group) return this.fail("Error: Invalid group ID", "ERR_INVALID_GROUP");
-    const survey = this.surveyOf(group.sid);
-    const base = survey?.language ?? "";
     const data = isRecord(params[2]) ? params[2] : {};
-    const result: Record<string, boolean> = {};
-    if (isRecord(data.questiongroupl10ns)) {
-      for (const [language, value] of Object.entries(data.questiongroupl10ns)) {
-        if (!isRecord(value)) continue;
-        const row = group.l10n[language] ?? { group_name: "", description: "" };
-        if (typeof value.group_name === "string") row.group_name = value.group_name;
-        if (typeof value.description === "string") row.description = value.description;
-        group.l10n[language] = row;
-      }
-      result.questiongroupl10ns = true;
+    const result: Record<string, unknown> = {};
+    // LimeSurvey 7.5.1 remotecontrol_handle.php:1419-1472 (6.17.11 :1353-1406, same logic): the old form (a non-empty
+    // language plus group_name/description) becomes questiongroupl10ns[language], the part not given is ''. Every language
+    // entry answers per field with the result of save(); a missing row is created first (false for the language when that
+    // fails, which this fake never does); an entry without a valid field answers 'Empty group L10n data'.
+    const l10n: Record<string, unknown> = isRecord(data.questiongroupl10ns) ? { ...data.questiongroupl10ns } : {};
+    const legacyLanguage = asText(data.language) ?? "";
+    if (legacyLanguage !== "") {
+      l10n[legacyLanguage] = { language: legacyLanguage, group_name: asText(data.group_name) ?? "", description: asText(data.description) ?? "" };
     }
-    // Old form: group_name/description (+ language) write one language, the part not given becomes empty.
-    if ("group_name" in data || "description" in data || "language" in data) {
-      const language = asText(data.language) || base;
-      group.l10n[language] = { group_name: asText(data.group_name) ?? "", description: asText(data.description) ?? "" };
-      result.group_name = true;
+    if (Object.keys(l10n).length > 0) {
+      const answers: Record<string, unknown> = {};
+      for (const [language, value] of Object.entries(l10n)) {
+        const row = group.l10n[language] ?? { group_name: "", description: "" };
+        group.l10n[language] = row;
+        const fields = isRecord(value) ? Object.entries(value).filter(([name]) => GROUP_L10N_COLUMNS.includes(name)) : [];
+        if (fields.length === 0) {
+          answers[language] = "Empty group L10n data";
+          continue;
+        }
+        const saved: Record<string, boolean> = {};
+        for (const [name, field] of fields) {
+          if (name === "group_name" || name === "description") row[name] = asText(field) ?? "";
+          saved[name] = true;
+        }
+        answers[language] = saved;
+      }
+      result.questiongroupl10ns = answers;
     }
     for (const name of GROUP_BASE_FIELDS.filter((field) => field in data)) {
       const value = data[name];
@@ -844,17 +857,12 @@ export class FakeLimeSurvey {
     const data = isRecord(params[2]) ? params[2] : {};
     const result: Record<string, unknown> = {};
 
-    const updates: Record<string, { question?: string; help?: string; script?: string }> = {};
-    if (isRecord(data.questionl10ns)) {
-      for (const [lang, value] of Object.entries(data.questionl10ns)) {
-        if (!isRecord(value)) continue;
-        const update: { question?: string; help?: string; script?: string } = {};
-        if (typeof value.question === "string") update.question = value.question;
-        if (typeof value.help === "string") update.help = value.help;
-        if (typeof value.script === "string") update.script = value.script;
-        updates[lang] = update;
-      }
-    }
+    // LimeSurvey 7.5.1 remotecontrol_handle.php:1973-2033 (6.17.11 :1898-1950): the old form becomes
+    // questionl10ns[language]; every language entry answers per field with the result of save(), for example
+    // {"questionl10ns": {"de": {"question": true, "help": true}}}. A missing row is created first (with question and help
+    // ''; false for the language when that save fails, which this fake never does); an entry without a valid field
+    // answers 'Empty question L10n data'. Approximation: id, qid and language are reported as saved but not applied.
+    const l10n: Record<string, unknown> = isRecord(data.questionl10ns) ? { ...data.questionl10ns } : {};
     const legacyLanguage = asText(data.language) ?? "";
     const legacy = this.generation === 7 ? legacyLanguage !== "" || "question" in data || "help" in data : legacyLanguage !== "";
     if (legacy) {
@@ -862,17 +870,31 @@ export class FakeLimeSurvey {
       const target = legacyLanguage || language;
       const existing = question.l10n[target];
       const keep = this.generation === 7;
-      updates[target] = {
+      l10n[target] = {
+        language: target,
         question: asText(data.question) ?? (keep ? existing?.question : undefined) ?? "",
         help: asText(data.help) ?? (keep ? existing?.help : undefined) ?? "",
       };
     }
-    for (const [lang, update] of Object.entries(updates)) {
-      const row = question.l10n[lang] ?? { id: this.nextL10nId++, question: "", help: "", script: "" };
-      Object.assign(row, update);
-      question.l10n[lang] = row;
+    if (Object.keys(l10n).length > 0) {
+      const answers: Record<string, unknown> = {};
+      for (const [lang, value] of Object.entries(l10n)) {
+        const row = question.l10n[lang] ?? { id: this.nextL10nId++, question: "", help: "", script: "" };
+        question.l10n[lang] = row;
+        const fields = isRecord(value) ? Object.entries(value).filter(([name]) => QUESTION_L10N_COLUMNS.includes(name)) : [];
+        if (fields.length === 0) {
+          answers[lang] = "Empty question L10n data";
+          continue;
+        }
+        const saved: Record<string, boolean> = {};
+        for (const [name, field] of fields) {
+          if (name === "question" || name === "help" || name === "script") row[name] = asText(field) ?? "";
+          saved[name] = true;
+        }
+        answers[lang] = saved;
+      }
+      result.questionl10ns = answers;
     }
-    if (Object.keys(updates).length > 0) result.questionl10ns = true;
 
     for (const name of QUESTION_BASE_FIELDS.filter((field) => field in data)) {
       const accepted = this.setQuestionField(question, name, data[name]);

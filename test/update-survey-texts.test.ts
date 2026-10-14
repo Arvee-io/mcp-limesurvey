@@ -3,7 +3,7 @@ import test from "node:test";
 import { FakeLimeSurvey, type FakeGroup, type FakeQuestion, type FakeSurvey } from "./helpers/fake-limesurvey.js";
 import { envConfig } from "./helpers/mcp-session.js";
 import { groupsOf, importSpec, withSession, writeMethodsSince, type Json } from "./helpers/spec-tools.js";
-import { both, errorPaths, propertyNames, requestsSince } from "./helpers/add-tools.js";
+import { both, errorPaths, outcomeAfterRun, propertyNames, requestsSince } from "./helpers/add-tools.js";
 import { clone, failOnCall, UPDATE_TEXTS, updateTextsError, updateTextsOk } from "./helpers/update-tools.js";
 
 /**
@@ -413,3 +413,82 @@ test("[GEN-F] the fingerprint of a dry run is accepted by the real run; a text c
   }, { fake });
   assert.equal(question("Q1").l10n.en?.question, "Question one, new");
 });
+
+// ---- live findings of PR5 (LimeSurvey 7.5.1 and 6.17.11): the answer form of the L10n writes ----
+
+test("[GEN-F] a group and a question without a row in en get one: LimeSurvey creates the row, the texts are written and verified", async () => {
+  const { fake, sid, groups, question } = await setup();
+  const g1 = groupAt(groups, 0);
+  const q1 = question("Q1");
+  delete g1.l10n.en;
+  delete q1.l10n.en;
+  const result = await withSession((session) => updateTextsOk(session, {
+    survey_id: sid,
+    texts: { groups: [{ group_id: g1.gid, title: { en: "Group 1 again" } }], questions: [{ code: "Q1", text: { en: "Question one again" } }] },
+  }), { fake });
+  assert.equal(result.applied, true);
+  assert.equal(result.verification?.ok, true, JSON.stringify(result.verification));
+  const changes = changesOf(result);
+  assert.equal(changes.length, 2, JSON.stringify(changes));
+  assert.ok(changes.every((item) => item.language === "en" && item.current === null), JSON.stringify(changes));
+  assert.deepEqual(g1.l10n.en, { group_name: "Group 1 again", description: "" });
+  // A function, so the row is read again (TypeScript narrowed q1.l10n.en after the delete).
+  const rowIn = (language: string) => q1.l10n[language];
+  assert.deepEqual([rowIn("en")?.question, rowIn("en")?.help], ["Question one again", ""]);
+  assert.deepEqual([g1.l10n.de?.group_name, q1.l10n.de?.question], ["Gruppe 1", "Frage eins"], "the other language stays");
+});
+
+/**
+ * Answers of the L10n writes that are failures (7.5.1 RC:1430-1464 and 1991-2031): false for a language (the missing row
+ * could not be created), the text "Empty ... L10n data", or false for a field. The partial cases really run in the fake
+ * (LimeSurvey saved the other field), so the rollback has something to reset.
+ */
+const L10N_WRITE_FAILURES: Array<[label: string, step: RegExp, prepare: (fake: FakeLimeSurvey) => void]> = [
+  [
+    "set_question_properties answering false for the language",
+    /set_question_properties/,
+    (fake) => fake.failNext("set_question_properties", { questionl10ns: { en: false } }),
+  ],
+  [
+    "set_question_properties answering \"Empty question L10n data\"",
+    /set_question_properties/,
+    (fake) => fake.failNext("set_question_properties", { questionl10ns: { en: "Empty question L10n data" } }),
+  ],
+  [
+    "set_question_properties answering help false after the question text was saved",
+    /set_question_properties/,
+    (fake) => outcomeAfterRun(fake, "set_question_properties", { kind: "result", result: { questionl10ns: { en: { question: true, help: false } } } }),
+  ],
+  [
+    "set_group_properties answering false for the language",
+    /set_group_properties/,
+    (fake) => fake.failNext("set_group_properties", { questiongroupl10ns: { de: false } }),
+  ],
+  [
+    "set_group_properties answering group_name false after the description was saved",
+    /set_group_properties/,
+    (fake) => outcomeAfterRun(fake, "set_group_properties", { kind: "result", result: { questiongroupl10ns: { de: { group_name: false, description: true } } } }),
+  ],
+];
+
+for (const [label, step, prepare] of L10N_WRITE_FAILURES) {
+  test(`[GEN-F] ${label} is a failed write: TEXT_UPDATE_FAILED with rolled_back, every text the call wrote is reset`, async () => {
+    const { fake, sid, groups } = await setup();
+    const g1 = groupAt(groups, 0);
+    const original = snapshot(fake, sid);
+    prepare(fake);
+    const error = await withSession((session) => updateTextsError(session, {
+      survey_id: sid,
+      texts: {
+        survey: { title: { de: "Umfrage neu" } },
+        groups: [{ group_id: g1.gid, title: { de: "Gruppe 1 neu" } }],
+        questions: [{ code: "Q1", text: { en: "Question one, new" } }],
+      },
+    }), { fake });
+    assert.equal(error.code, "TEXT_UPDATE_FAILED", JSON.stringify(error).slice(0, 1500));
+    assert.match(String(error.details?.failed_step), step);
+    assert.equal(error.details?.rolled_back, true, JSON.stringify(error.details));
+    assert.deepEqual(error.details?.manual_cleanup, []);
+    assert.deepEqual(snapshot(fake, sid), original, "every text is as before");
+  });
+}

@@ -3,8 +3,8 @@ import test from "node:test";
 import { FakeLimeSurvey, type FakeQuestion, type Generation } from "./helpers/fake-limesurvey.js";
 import { envConfig } from "./helpers/mcp-session.js";
 import { seedSurvey, type SeedSurvey } from "./helpers/seed-survey.js";
-import { importSpec, mainQuestionsOf, readOk, withSession, writeMethodsSince, type Json } from "./helpers/spec-tools.js";
-import { both, captureResults, codesOf, errorPaths, propertyNames, requestsSince, surveyOutline } from "./helpers/add-tools.js";
+import { importSpec, mainQuestionsOf, readOk, validateSpec, withSession, writeMethodsSince, type Json } from "./helpers/spec-tools.js";
+import { both, captureResults, codesOf, errorPaths, outcomeAfterRun, propertyNames, requestsSince, surveyOutline } from "./helpers/add-tools.js";
 import {
   acknowledgeable,
   ALL_ACK,
@@ -758,4 +758,100 @@ test("[GEN-B] the dry run of a replacement names what RemoteControl cannot read 
   assert.equal(preview.mode, "replace");
   const named = JSON.stringify({ risks: preview.risks ?? null, plan: preview.plan ?? null });
   assert.match(named, /undefined_attributes/, named);
+});
+
+// ---- live findings of PR5 (LimeSurvey 7.5.1 and 6.17.11) ----
+
+/**
+ * set_question_properties answers questionl10ns per language and field (7.5.1 RC:1991-2031): { de: { question: true,
+ * help: true } } is a success; false for a language, the text "Empty question L10n data" or false for a field is not.
+ * The existing texts tests (active survey, empty subquestion text) cover the success form.
+ */
+const TEXT_WRITE_FAILURES: Array<[label: string, prepare: (fake: FakeLimeSurvey) => void]> = [
+  ["false for the language (the missing row could not be created)", (fake) => fake.failNext("set_question_properties", { questionl10ns: { de: false } })],
+  ["the text \"Empty question L10n data\"", (fake) => fake.failNext("set_question_properties", { questionl10ns: { de: "Empty question L10n data" } })],
+  // The write really runs (the question text is saved), but LimeSurvey reports the help text as not saved.
+  ["false for one field (help) after the question text was saved", (fake) => outcomeAfterRun(fake, "set_question_properties", {
+    kind: "result",
+    result: { questionl10ns: { de: { question: true, help: false } } },
+  })],
+];
+
+for (const [label, prepare] of TEXT_WRITE_FAILURES) {
+  test(`[GEN-B] texts mode: set_question_properties answering ${label} is a failure: UPDATE_QUESTION_FAILED, the old texts are back`, async () => {
+    const { fake, sid, question } = await setup();
+    const q1 = question("Q1");
+    fake.setActive(sid, true);
+    const read = await withSession((session) => readOk(session, { survey_id: sid, question_id: q1.qid }), { fake });
+    const desired = clone(read.spec);
+    desired.text = { de: "Wahl, neu formuliert" };
+    prepare(fake);
+    const error = await withSession((session) => updateQuestionError(session, real(sid, q1.qid, desired, read.fingerprint)), { fake });
+    assert.equal(error.code, "UPDATE_QUESTION_FAILED", JSON.stringify(error).slice(0, 1500));
+    assert.equal(error.details?.rolled_back, true, JSON.stringify(error.details));
+    assert.deepEqual([q1.l10n.de?.question, q1.l10n.de?.help], ["Wahl", "Bitte wählen"], "the question keeps its texts");
+  });
+}
+
+/** BASE with display_columns on Q1 (type L): an attribute of the theme listradio that list_dropdown (type !) does not have. */
+function withDisplayColumns(): Json {
+  const spec = clone(BASE);
+  spec.groups[0].questions[1].attributes = { display_columns: 2 };
+  return spec;
+}
+
+test("[GEN-B] a type change L to ! that keeps display_columns (type ! does not use it): dry run and real run answer SPEC_INVALID at attributes.display_columns and write nothing; without the attribute the replacement runs", async () => {
+  const { fake, sid, question } = await setup(withDisplayColumns());
+  const old = question("Q1");
+  const codes = codesOf(fake, old.gid);
+  await withSession(async (session) => {
+    const read = await readOk(session, { survey_id: sid, question_id: old.qid });
+    assert.equal(read.spec.attributes.display_columns, "2", "the premise: the question has the attribute");
+    const desired = clone(read.spec);
+    desired.type = "!";
+    const before = fake.requests.length;
+    for (const args of [dry(sid, old.qid, desired), real(sid, old.qid, desired, read.fingerprint, ALL_ACK)]) {
+      const error = await updateQuestionError(session, args);
+      const paths = errorPaths(error);
+      assert.ok(paths.includes("attributes.display_columns"), `dry_run ${String(args.dry_run === true)}: paths ${paths.join(", ")}`);
+      const finding = (error.details?.errors as Json[]).find((item) => item.path === "attributes.display_columns");
+      assert.match(String(finding?.fix), /display_columns/);
+      assert.match(String(finding?.fix), /remove/i);
+    }
+    assert.deepEqual(writeMethodsSince(fake, before), [], "nothing is written");
+
+    delete desired.attributes.display_columns;
+    const preview = await updateQuestionOk(session, dry(sid, old.qid, desired));
+    assert.equal(preview.mode, "replace");
+    const result = await updateQuestionOk(session, real(sid, old.qid, desired, read.fingerprint, acknowledgeable(preview)));
+    assert.equal(result.verification?.ok, true, JSON.stringify(result.verification));
+    assert.equal(fake.questions.find((item) => item.qid === Number(result.question_id))?.type, "!");
+  }, { fake });
+  assert.deepEqual(codesOf(fake, old.gid), codes);
+});
+
+test("[GEN-B] the spec check of every spec tool (validate_spec) refuses an attribute that the theme of the question does not use; plugin attributes, attributes of the extended theme and unknown themes stay allowed", async () => {
+  const answers = [{ code: "A1", text: "Eins" }];
+  await withSession(async (session) => {
+    const refused: Array<[label: string, spec: Json, path: string]> = [
+      ["display_columns on type ! (list_dropdown)", { code: "Q1", type: "!", text: "Wahl", answers, attributes: { display_columns: "2" } }, "attributes.display_columns"],
+      ["button_size on type L without the theme bootstrap_buttons", { code: "Q1", type: "L", text: "Wahl", answers, attributes: { button_size: "large" } }, "attributes.button_size"],
+    ];
+    for (const [label, spec, path] of refused) {
+      const result = await validateSpec(session, spec, { kind: "question" });
+      assert.equal(result.valid, false, label);
+      const finding = (result.errors as Json[]).find((item) => item.path === path);
+      assert.ok(finding, `${label}: no error at ${path}; ${JSON.stringify(result.errors)}`);
+      assert.ok(String(finding.fix).includes(path.split(".")[1] ?? ""), `${label}: the fix names the attribute: ${String(finding.fix)}`);
+    }
+    const allowed: Array<[label: string, spec: Json]> = [
+      ["button_size with the theme bootstrap_buttons", { code: "Q1", type: "L", question_theme_name: "bootstrap_buttons", text: "Wahl", answers, attributes: { button_size: "large", answer_order: "random" } }],
+      ["a plugin attribute (in no theme table)", { code: "Q1", type: "!", text: "Wahl", answers, attributes: { plugin_hint: "Hinweis" } }],
+      ["display_columns with a theme the tables do not know", { code: "Q1", type: "!", question_theme_name: "my_custom_theme", text: "Wahl", answers, attributes: { display_columns: "2" } }],
+    ];
+    for (const [label, spec] of allowed) {
+      const result = await validateSpec(session, spec, { kind: "question" });
+      assert.equal(result.valid, true, `${label}: ${JSON.stringify(result.errors)}`);
+    }
+  });
 });

@@ -236,6 +236,53 @@ test("[GEN-FAKE] set_question_properties text writes: questionl10ns keeps the ot
   }
 });
 
+test("[GEN-FAKE] L10n writes answer like LimeSurvey (7.5.1 RC:1430-1464, 1991-2031): per language and field, a text without a valid field, a missing row created", async () => {
+  const { fake, key } = await withP03();
+  const main = fake.questions.find((item) => item.title === "A01");
+  const group = fake.groups[0];
+  assert.ok(main && group);
+  assert.deepEqual(
+    await rpc(fake, "set_question_properties", key, main.qid, { questionl10ns: { de: { question: "Neu", help: "Hilfe" } } }),
+    { questionl10ns: { de: { question: true, help: true } } },
+  );
+  assert.deepEqual(
+    await rpc(fake, "set_question_properties", key, main.qid, { questionl10ns: { de: { unknown: "x" } } }),
+    { questionl10ns: { de: "Empty question L10n data" } },
+  );
+  // A language without a row: LimeSurvey creates the row (question and help empty) and then saves the fields.
+  assert.equal(main.l10n.en, undefined);
+  assert.deepEqual(
+    await rpc(fake, "set_question_properties", key, main.qid, { questionl10ns: { en: { question: "New" } } }),
+    { questionl10ns: { en: { question: true } } },
+  );
+  const created = (language: string) => main.l10n[language];
+  assert.deepEqual([created("en")?.question, created("en")?.help], ["New", ""]);
+  // The old form becomes questionl10ns[language] and answers in the same shape.
+  assert.deepEqual(
+    await rpc(fake, "set_question_properties", key, main.qid, { language: "de", question: "Alt" }),
+    { questionl10ns: { de: { language: true, question: true, help: true } } },
+  );
+
+  assert.deepEqual(
+    await rpc(fake, "set_group_properties", key, group.gid, { questiongroupl10ns: { de: { group_name: "G", description: "D" } } }),
+    { questiongroupl10ns: { de: { group_name: true, description: true } } },
+  );
+  assert.deepEqual(
+    await rpc(fake, "set_group_properties", key, group.gid, { questiongroupl10ns: { de: {} } }),
+    { questiongroupl10ns: { de: "Empty group L10n data" } },
+  );
+  assert.deepEqual(
+    await rpc(fake, "set_group_properties", key, group.gid, { questiongroupl10ns: { en: { description: "E" } }, grelevance: "1" }),
+    { questiongroupl10ns: { en: { description: true } }, grelevance: true },
+  );
+  assert.deepEqual(group.l10n.en, { group_name: "", description: "E" }, "the missing row was created");
+  // Without language the old form does nothing in LimeSurvey (group_name is no column of the groups table).
+  assert.deepEqual(
+    await rpc(fake, "set_group_properties", key, group.gid, { group_name: "Ohne Sprache" }),
+    { status: "No valid Data", error_code: "ERR_NO_DATA" },
+  );
+});
+
 test("[GEN-FAKE] set_group_properties writes group texts and renumbers the groups from 0", async () => {
   const { fake, key, sid } = await withP03();
   const original = fake.groups[0];
