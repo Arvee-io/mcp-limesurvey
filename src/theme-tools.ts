@@ -439,7 +439,9 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
     );
   }
   let totalUncompressedBytes = 0;
-  if (entries.length > 50) errors.push("Theme packages may contain at most 50 entries.");
+  if (entries.length > 50) {
+    warnings.push(`policy: the package has ${entries.length} entries; generated packages stay at 50 entries or fewer. LimeSurvey has no such limit.`);
+  }
   for (const entry of entries) {
     const original = entry.unsafeOriginalName ?? entry.name;
     if (original.startsWith("/") || original.includes("\\") || original.split("/").includes("..")) {
@@ -472,15 +474,25 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
   const cssEntry = zip.file("css/mcp-theme.css");
   const licenseEntry = zip.file("LICENSE.txt");
   if (!configEntry) errors.push("config.xml must be at the archive root.");
-  if (!cssEntry) errors.push("css/mcp-theme.css is missing.");
-  if (!licenseEntry) errors.push("LICENSE.txt is missing.");
+  if (!cssEntry) {
+    warnings.push(
+      "policy: css/mcp-theme.css is missing; generated packages keep their styles there. LimeSurvey loads the CSS files "
+        + "config.xml lists, or those of the parent theme.",
+    );
+  }
+  if (!licenseEntry) {
+    warnings.push(
+      "policy: LICENSE.txt is missing; generated packages ship the GPL-2.0-or-later notice of a theme that inherits "
+        + "the GPL-licensed vanilla. LimeSurvey does not need the file.",
+    );
+  }
 
   let metadata: Record<string, JsonValue> = {};
   if (configEntry) {
     const xml = await configEntry.async("string");
     try {
       const parsed = new XMLParser({ ignoreAttributes: false, trimValues: true }).parse(xml) as {
-        config?: { metadata?: Record<string, unknown>; compatibility?: { version?: string | string[] } };
+        config?: { metadata?: Record<string, unknown>; compatibility?: { version?: string | string[] }; engine?: unknown };
       };
       const raw = parsed.config?.metadata ?? {};
       const name = String(raw.name ?? "");
@@ -505,10 +517,19 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
         errors.push("Manifest metadata/title is longer than 100 characters; LimeSurvey stops the import after extracting the files.");
       }
       if (!parent) {
-        errors.push(
-          "Manifest metadata/extends is missing. This validator checks inheriting themes only; a theme without a parent "
-            + "needs its own engine section and complete views.",
-        );
+        // Without a parent, the engine section (view and files folders, CSS framework) comes from the theme itself
+        // (TemplateManifest.php:726-734); without it LimeSurvey has no view folder to render from.
+        if (!parsed.config?.engine) {
+          errors.push(
+            "Manifest has neither metadata/extends nor an engine section; LimeSurvey cannot render such a theme. "
+              + "Extend vanilla as generated packages do.",
+          );
+        } else {
+          warnings.push(
+            "policy: the theme has no parent (metadata/extends); generated packages extend vanilla. This validator "
+              + "does not check that views/ holds every template a standalone theme needs.",
+          );
+        }
       } else if (parent !== "vanilla") {
         warnings.push(
           `policy: the theme extends ${parent} instead of vanilla; LimeSurvey imports it only where ${parent} is installed.`,
@@ -518,11 +539,22 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
       if (type !== "theme") {
         warnings.push(`policy: metadata/type is "${type}"; generated packages use theme. LimeSurvey does not check it.`);
       }
-      if (!license.toLowerCase().includes("general public license")) errors.push("Manifest must declare the GPL-compatible license.");
+      if (!license.toLowerCase().includes("general public license")) {
+        warnings.push(
+          "policy: metadata/license does not name the GNU General Public License; generated packages declare "
+            + "GPL-2.0-or-later because they inherit the GPL-licensed vanilla. LimeSurvey does not check it.",
+        );
+      }
       const has7 = versions.some((version) => version === "7" || version.startsWith("7."));
-      const has6 = versions.some((version) => version === "6" || version.startsWith("6."));
-      if (!has7 && !has6) {
-        errors.push("Manifest compatibility must target LimeSurvey 7.x or 6.x.");
+      // LimeSurvey 7 uninstalls a theme whose compatibility entries all name a major version below 6
+      // (TemplateConfig::validateTheme and isThemeTooOldToKeep, TemplateConfig.php:930-1016); a theme without any
+      // entry is kept.
+      const tooOld = versions.length > 0 && versions.every((version) => Number.parseInt(version, 10) < 6);
+      if (tooOld) {
+        errors.push(
+          "Manifest compatibility names only LimeSurvey versions below 6; LimeSurvey 7 uninstalls such a theme. "
+            + "Add a 7.x (or 6.x) entry.",
+        );
       } else if (!has7 && !/-ls6\.zip$/i.test(fileName)) {
         // A theme is compatible when an entry has the major version of LimeSurvey (ExtensionConfig.php:130-150); a
         // 6.x-only theme runs on LimeSurvey 7 through a transition rule only (TemplateConfig.php:963-966).
@@ -546,16 +578,31 @@ async function validateZip(config: LimeSurveyConfig, fileName: string): Promise<
       errors.push(`config.xml cannot be parsed: ${value instanceof Error ? value.message : String(value)}`);
     }
   }
-  if (cssEntry) {
-    const css = await cssEntry.async("string");
-    if (css.length > 200_000) errors.push("Theme CSS exceeds 200,000 characters.");
+  // The CSS rules are the generator's policy: LimeSurvey loads every CSS file as it is.
+  const cssTexts: string[] = [];
+  let mainCss: string | undefined;
+  for (const entry of entries.filter((item) => !item.dir && fileExtension(item.name) === "css")) {
+    const internal = entry as unknown as { _data?: { uncompressedSize?: number } };
+    if ((internal._data?.uncompressedSize ?? 0) > maxAssetBytes) continue;
+    const css = await entry.async("string");
+    cssTexts.push(css);
+    if (entry.name === "css/mcp-theme.css") mainCss = css;
+    if (css.length > 200_000) warnings.push(`policy: ${entry.name} exceeds 200,000 characters.`);
     if (/@import\b|javascript\s*:|expression\s*\(|url\s*\(\s*['"]?(?:https?:|\/\/|data:)/i.test(css)) {
-      errors.push("Theme CSS contains an external import, executable expression, or embedded/external URL.");
+      warnings.push(
+        `policy: ${entry.name} contains an @import, an executable expression, or an embedded or external URL; `
+          + "LimeSurvey serves it unchanged, so every participant's browser loads what it references. Review it.",
+      );
     }
-    if (!css.includes("@media (max-width: 575.98px)")) errors.push("Responsive small-screen rules are missing.");
-    if (!css.includes("prefers-reduced-motion")) warnings.push("Reduced-motion handling is missing.");
-    if (!css.includes(":focus-visible")) warnings.push("Visible keyboard focus styling is missing.");
   }
+  // The style checks look at css/mcp-theme.css, or at all CSS files together when it is missing.
+  const styles = cssEntry ? (mainCss ?? "") : cssTexts.join("\n");
+  const styleScope = cssEntry ? "css/mcp-theme.css" : "the CSS files";
+  if (!styles.includes("@media (max-width: 575.98px)")) {
+    warnings.push(`policy: responsive small-screen rules (@media (max-width: 575.98px)) are missing in ${styleScope}.`);
+  }
+  if (!styles.includes("prefers-reduced-motion")) warnings.push("Reduced-motion handling is missing.");
+  if (!styles.includes(":focus-visible")) warnings.push("Visible keyboard focus styling is missing.");
   for (const entry of entries.filter((item) => !item.dir)) {
     const signature = contentSignatures[fileExtension(entry.name) ?? ""];
     const internal = entry as unknown as { _data?: { uncompressedSize?: number } };
@@ -729,6 +776,18 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
           },
         );
       }
+      const warnings: string[] = [];
+      // The installed name drops the dots, so a component with more than one digit makes the digits ambiguous:
+      // 1.10.0 and 11.0.0 both install as <theme_name>-1100-ls<major>, and LimeSurvey refuses to import a name that is
+      // already installed (Themes.php:381, :419-423).
+      if (input.theme_version.split(".").some((component) => component.length > 1)) {
+        warnings.push(
+          `theme_version ${input.theme_version} installs as ${installedName}; other versions with the same digits (for `
+            + "example 1.10.0 and 11.0.0) give the same installed name, and LimeSurvey refuses to import a theme whose "
+            + "name is already installed. Check the theme list before the import, or prefer one digit per version "
+            + "component.",
+        );
+      }
       const { root, target } = safeThemeTarget(config, fileName);
       const zip = new JSZip();
       zip.file("config.xml", manifest({
@@ -793,12 +852,14 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         license: "GPL-2.0-or-later",
         parent_theme: "vanilla",
         compatibility: [`${input.target_limesurvey_major}.0`],
-        tested_reference: "LimeSurvey CE 7.0.5 / vanilla 3.0.1 manifest checked 2026-07-24",
+        tested_reference: "LimeSurvey CE 7.5.1 (2026-10-14): imported, installed as installed_theme_name, assigned and "
+          + "rendered; earlier LimeSurvey CE 7.0.5 / vanilla 3.0.1 manifest checked 2026-07-24",
         contrast: {
           text_on_background: Number(contrast(input.text_color, input.background_color).toFixed(2)),
           text_on_surface: Number(contrast(input.text_color, input.surface_color).toFixed(2)),
           button_text_on_primary: Number(contrast(foreground(input.primary_color), input.primary_color).toFixed(2)),
         },
+        warnings,
         next_tools: ["limesurvey_validate_survey_theme", "limesurvey_get_theme_publication_guide"],
       };
     }),
@@ -809,11 +870,13 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
     {
       title: "Validate a generated LimeSurvey survey theme",
       description: "Validate a ZIP inside LIMESURVEY_THEME_DIR against the LimeSurvey 7.5.1 import: valid=true means "
-        + "LimeSurvey imports and uses the package. errors cover the installed name from the ZIP file name (at most 45 "
-        + "characters), files the import would silently skip, a missing metadata/title or views/ directory, unsafe "
-        + "paths, sizes, content signatures of images and fonts, licensing, and CSS safety. Warnings starting with "
-        + "\"policy:\" mark what LimeSurvey accepts but the generator does not produce (for example JavaScript or a "
-        + "parent other than vanilla). Returns installed_theme_name.",
+        + "LimeSurvey imports and uses the package. errors cover archive safety (unsafe paths, size limits, content "
+        + "signatures of images and fonts) and real import obstacles (installed name from the ZIP file name over 45 "
+        + "characters or with other characters, files the import would silently skip, a missing metadata/title or "
+        + "views/ directory, config.xml not at the root). Warnings starting with \"policy:\" mark what LimeSurvey "
+        + "accepts but the generator does not produce, for example JavaScript, a parent other than vanilla, a missing "
+        + "css/mcp-theme.css, LICENSE.txt or GPL license, more than 50 entries, or external URLs in CSS. Returns "
+        + "installed_theme_name.",
       inputSchema: strictInput({ file_name: z.string().min(5) }),
       outputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -856,7 +919,7 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         "Open the Theme Editor preview and check welcome, question, completion, token, error, print-answers, and public-statistics screens at phone, tablet, and desktop widths.",
         `Create or use an inactive test survey. Run limesurvey_assign_survey_theme with theme_name ${installedName} for that survey; it reads the template back and reports THEME_NOT_APPLIED if LimeSurvey kept another theme. Then preview every language before activation.`,
         "Test keyboard-only navigation, visible focus, validation errors, 200% zoom, long labels, matrix questions, right-to-left languages where applicable, reduced motion, and print output.",
-        "Publish to production only after acceptance. An installed theme cannot be overwritten by a new upload: a new version is a new package with its own installed name. Keep the ZIP and the previous installed theme name so rollback only requires assigning the previous theme again.",
+        "Publish to production only after acceptance. An installed theme cannot be overwritten by a new upload: a new version is a new package with its own installed name. The installed name drops the dots of the version, so versions with the same digits (for example 1.10.0 and 11.0.0) collide; check the theme list before importing a new version. Keep the ZIP and the previous installed theme name so rollback only requires assigning the previous theme again.",
       ];
       if (input.hosting === "limesurvey_cloud") {
         steps.splice(3, 0, "If the Themes import control is unavailable in LimeSurvey Cloud, verify that custom theme upload is included for the account or contact LimeSurvey support; do not attempt filesystem installation.");
@@ -872,8 +935,10 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
         installed_version: input.installed_limesurvey_version,
         installed_theme_name: installedName,
         current_reference: {
-          checked_on: "2026-07-22",
-          current_ce_release: "7.0.5",
+          checked_on: "2026-10-14",
+          tested_ce_release: "7.5.1",
+          tested_steps: "import through Upload & install, installed name, assignment with read-back, rendering",
+          earlier_checks: [{ checked_on: "2026-07-22", current_ce_release: "7.0.5" }],
           supported_generator_majors: ["7", "6"],
           parent_theme: "vanilla",
           documentation: [
@@ -901,11 +966,16 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       description: "Assign an already imported LimeSurvey survey theme through set_survey_properties, then read the "
         + "template back with get_survey_properties. theme_name is the installed name (for a generated package its "
         + "installed_theme_name, such as acme_feedback-100-ls7). LimeSurvey answers {\"template\": true} even when it "
-        + "keeps another theme; a different read-back value fails with THEME_NOT_APPLIED. This does not upload or "
-        + "install the theme package.",
+        + "keeps another theme; a different read-back value fails with THEME_NOT_APPLIED, a failed read-back with "
+        + "THEME_NOT_VERIFIED (written: true). inherit is refused; set inheritance in the admin interface. This does "
+        + "not upload or install the theme package.",
       inputSchema: strictInput({
         survey_id: z.number().int().positive(),
-        theme_name: installedThemeNameSchema,
+        // "inherit" makes the survey take the theme of its survey group; the read-back cannot confirm that.
+        theme_name: installedThemeNameSchema.refine((name) => name !== "inherit", {
+          message: "inherit is not accepted: choose Inherit as the theme in the survey's general settings in the "
+            + "LimeSurvey admin interface, or assign an installed theme name.",
+        }),
         confirm_theme_assignment: z.literal(true).describe("Required acknowledgement that the survey appearance will change."),
       }),
       outputSchema,
@@ -917,7 +987,26 @@ export function registerThemeTools(server: McpServer, client: LimeSurveyClient, 
       // not readable for the account, or not valid with the default theme (Survey.php:573, :626-643;
       // Template::templateNameFilter, Template.php:166-220) and still answers true; reading applies the same filter,
       // so the read-back shows the theme the survey really uses (Survey.php:613-615).
-      const readBack = objectValue(await client.call("get_survey_properties", [survey_id, ["template"]]));
+      let readBackValue: JsonValue;
+      try {
+        readBackValue = await client.call("get_survey_properties", [survey_id, ["template"]]);
+      } catch (value) {
+        const cause = describeError(value);
+        throw new LimeSurveyError(
+          `Theme ${theme_name} was sent to survey ${survey_id}, but reading the template back failed: ${cause.message}`,
+          "THEME_NOT_VERIFIED",
+          {
+            survey_id,
+            requested_theme: theme_name,
+            written: true,
+            rpc_result: rpcResult,
+            ...(cause.code !== undefined ? { cause_code: cause.code } : {}),
+            recovery: "Do not repeat the assignment blindly: check the template in the admin interface or call "
+              + "limesurvey_get_survey_properties with the property template.",
+          },
+        );
+      }
+      const readBack = objectValue(readBackValue);
       const stored = readBack?.template ?? null;
       if (stored !== theme_name) {
         throw new LimeSurveyError(

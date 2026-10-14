@@ -2,13 +2,19 @@
 
 ## Supported baseline
 
-The implementation was verified on July 22, 2026 against LimeSurvey CE 7.0.5,
-and on July 24, 2026 against the official `vanilla` 3.0.1 ("Bootstrap Vanilla")
-manifest, the minimal official base theme shipped and installed with every
-LimeSurvey instance. Generated themes extend `vanilla` instead of
-`fruity_twentythree` so they no longer depend on `fruity_twentythree` being
-installed. The core theme uses Bootstrap 5 in LimeSurvey 6 and 7 and declares
-compatibility with both major versions.
+The implementation was last verified on October 14, 2026 against LimeSurvey CE
+7.5.1: a generated package was imported with **Upload & install** in the theme
+list, installed as `<theme_name>-<theme_version without dots>-ls7`, assigned
+to a survey with that name (read-back `verified: true`), and rendered with
+`css/mcp-theme.css` loaded.
+
+Earlier checks: July 22, 2026 against LimeSurvey CE 7.0.5, and July 24, 2026
+against the official `vanilla` 3.0.1 ("Bootstrap Vanilla") manifest, the
+minimal official base theme shipped and installed with every LimeSurvey
+instance. Generated themes extend `vanilla` instead of `fruity_twentythree` so
+they no longer depend on `fruity_twentythree` being installed. The core theme
+uses Bootstrap 5 in LimeSurvey 6 and 7 and declares compatibility with both
+major versions.
 
 LimeSurvey publishes frequent patch releases. Before every installation, compare
 the version shown in the lower-right corner of the administration interface with:
@@ -86,6 +92,11 @@ installed as `weit_feedback-100-ls7`. The result returns this name as
 - Every version is a separate installed theme (`weit_feedback-110-ls7` after
   `weit_feedback-100-ls7`), so the previous version stays available for
   rollback.
+- Because the dots disappear, versions with the same digits collide:
+  `1.10.0` and `11.0.0` both install as `weit_feedback-1100-ls7`, and
+  LimeSurvey refuses to import a name that is already installed. The generator
+  adds a warning when a version component has more than one digit; prefer one
+  digit per component or check the theme list before the import.
 
 Generated themes are freely usable under GPL-2.0-or-later. This license is
 deliberate because the theme inherits the GPL-licensed `vanilla`.
@@ -104,8 +115,13 @@ Continue only when `valid=true`: LimeSurvey imports and uses the package. The
 result includes `installed_theme_name`, derived from the file name. The rules
 follow the import code of LimeSurvey 7.5.1 with its default upload lists.
 
-Errors (`valid=false`):
+Errors (`valid=false`) are limited to archive safety and real import
+obstacles:
 
+- unsafe ZIP paths (path traversal, absolute paths) and the size limits for
+  the archive and each entry;
+- image and font content that does not match the extension (PNG, JPEG, GIF,
+  ICO, WOFF2, WOFF, TTF, OTF; EOT has no signature to check);
 - an installed name longer than 45 characters, or with characters other than
   ASCII letters, digits, `_`, and `-` (LimeSurvey rejects or changes
   `#$%^&*()+=[]';,./{}|:<>?~`);
@@ -113,16 +129,12 @@ Errors (`valid=false`):
   type outside `css js map json eot otf ttf woff woff2 txt md xml twig lss lsa
   lsq lsg gif ico jpg jpeg png`, for example `.html` (also in `views/`),
   `.svg`, `.php`, or `.gitkeep`;
-- a missing or overlong (over 100 characters) `metadata/title`, a missing
-  `metadata/extends`, or a missing `views/` directory;
+- a missing or overlong (over 100 characters) `metadata/title`, or a missing
+  `views/` directory;
 - `config.xml` not at the archive root;
-- unsafe ZIP paths, more than 50 entries, and the size limits;
-- image and font content that does not match the extension (PNG, JPEG, GIF,
-  ICO, WOFF2, WOFF, TTF, OTF; EOT has no signature to check);
-- a missing GPL license, `css/mcp-theme.css`, `LICENSE.txt`, or responsive
-  small-screen rules, and remote CSS imports, data URLs, or JavaScript
-  expressions in the CSS;
-- a compatibility list without any 6.x or 7.x entry.
+- a theme with neither `metadata/extends` nor an `engine` section, and a
+  compatibility list that names only versions below 6 (LimeSurvey 7
+  uninstalls such a theme).
 
 Allowed without a finding: web fonts (`woff2 woff ttf otf eot`), `txt` and `md`
 files anywhere, `gif` and `ico` images, and subfolders in `css/` and `files/`.
@@ -132,7 +144,16 @@ never produces. They do not affect `valid`; review them before the import:
 
 - JavaScript, source maps, JSON, XML other than `config.xml`, survey exports,
   and files without an extension;
-- a parent other than `vanilla` (it must be installed on the target instance);
+- a missing `css/mcp-theme.css` or `LICENSE.txt`, a license other than the GNU
+  General Public License, and more than 50 entries;
+- `@import`, JavaScript expressions, and embedded or external URLs in any CSS
+  file (participants' browsers load what they reference), and CSS files over
+  200,000 characters;
+- missing responsive small-screen rules, checked in `css/mcp-theme.css` or, when
+  it is missing, in all CSS files together;
+- a parent other than `vanilla` (it must be installed on the target instance),
+  or no parent but an `engine` section (a standalone theme; the validator does
+  not check that `views/` holds every template);
 - `metadata/type` other than `theme`, and a `metadata/name` that differs from
   the installed name (LimeSurvey ignores both);
 - no 7.x compatibility entry in a package that is not marked `-ls6`.
@@ -148,7 +169,7 @@ Tool: `limesurvey_get_theme_publication_guide`
 {
   "theme_name": "weit_feedback",
   "package_file_name": "weit_feedback-1.0.0-ls7.zip",
-  "installed_limesurvey_version": "7.0.5",
+  "installed_limesurvey_version": "7.5.1",
   "hosting": "self_hosted",
   "publication_scope": "instance"
 }
@@ -202,9 +223,14 @@ when it keeps another theme: a theme that is not installed under this name, not
 readable for the RemoteControl account, or incompatible is silently replaced by
 the previous or the default theme. The tool therefore reads the `template`
 property back. A match returns `verified: true`; a different value fails with
-`THEME_NOT_APPLIED`, naming the requested and the stored theme. Then open the
-survey as a participant in every configured language. Assign it to a
-production survey only after review.
+`THEME_NOT_APPLIED`, naming the requested and the stored theme. If only the
+read-back fails, the tool answers `THEME_NOT_VERIFIED` with `written: true`:
+check the template in the admin interface or with
+`limesurvey_get_survey_properties` instead of repeating the call. The value
+`inherit` is refused; choose **Inherit** as the theme in the survey's general
+settings in the admin interface instead. Then open the survey as a participant
+in every configured language. Assign it to a production survey only after
+review.
 
 ## Acceptance and rollback
 
@@ -220,5 +246,6 @@ At minimum, test:
 
 Record the previous theme name before deployment. LimeSurvey does not overwrite
 an installed theme with a new upload; a new version is a new package with its
-own installed name. Roll back by assigning the previous installed theme with
+own installed name (mind versions with the same digits, see
+[Installed theme name](#installed-theme-name)). Roll back by assigning the previous installed theme with
 `limesurvey_assign_survey_theme`; the new package does not need to be deleted.

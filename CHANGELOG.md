@@ -82,25 +82,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   theme.
   - `limesurvey_generate_survey_theme` returns `installed_theme_name`, writes it
     as `metadata/name`, and refuses a `theme_name` whose installed name would
-    exceed LimeSurvey's 45 characters (`THEME_NAME_TOO_LONG`) before writing.
+    exceed LimeSurvey's 45 characters (`THEME_NAME_TOO_LONG`) before writing. A
+    version component with more than one digit gives a warning, because the
+    installed name drops the dots (`1.10.0` and `11.0.0` both become `1100`).
   - `limesurvey_assign_survey_theme` takes installed names (1–45 ASCII letters,
-    digits, `_`, `-`), reads the template back after `set_survey_properties`,
-    and fails with `THEME_NOT_APPLIED` when LimeSurvey stored another theme; a
-    match returns `verified: true`.
+    digits, `_`, `-`; `inherit` is refused), reads the template back after
+    `set_survey_properties`, and fails with `THEME_NOT_APPLIED` when LimeSurvey
+    stored another theme, or with `THEME_NOT_VERIFIED` (`written: true`) when
+    only the read-back fails; a match returns `verified: true`.
   - `limesurvey_validate_survey_theme` follows the LimeSurvey 7.5.1 import and
-    returns `installed_theme_name`. New errors: an installed name over 45
+    returns `installed_theme_name`; `valid` means LimeSurvey imports and uses the
+    package. Errors remain only for archive safety (unsafe paths, size limits,
+    content signatures) and real import obstacles: an installed name over 45
     characters or with other characters, files the import would skip (such as
-    `.html` in `views/`), and a missing `metadata/title`. Now allowed: web fonts
-    (`woff2`, `woff`, `ttf`, `otf` with a signature check, `eot`), `txt`/`md`
-    anywhere, `gif`/`ico`, and subfolders in `css/` and `files/`. JavaScript,
-    source maps, JSON, files without an extension, a parent other than
-    `vanilla`, a `type` other than `theme`, and a missing 7.x compatibility entry
-    are `policy:` warnings instead of errors.
+    `.html` in `views/`), a missing `metadata/title` or `views/`, `config.xml`
+    not at the root. Now allowed: web fonts (`woff2`, `woff`, `ttf`, `otf` with a
+    signature check, `eot`), `txt`/`md` anywhere, `gif`/`ico`, and subfolders in
+    `css/` and `files/`. The generator's own rules are `policy:` warnings
+    instead of errors: JavaScript, source maps, JSON, files without an
+    extension, a parent other than `vanilla`, a `type` other than `theme`, a
+    missing 7.x compatibility entry, a missing `css/mcp-theme.css`,
+    `LICENSE.txt` or GPL license, missing small-screen rules, more than 50
+    entries, and `@import`, expressions or external URLs in any CSS file.
   - `limesurvey_get_theme_publication_guide` returns `installed_theme_name` and
     explains the import through the theme list: do not rename the ZIP, avoid the
     replacement upload form behind "This theme type ('') is not allowed.",
-    delete a theme folder left behind by a failed import, and treat a new
-    version as a new theme.
+    delete a theme folder left behind by a failed import, treat a new version as
+    a new theme, and mind versions with the same digits.
+  - Verified on LimeSurvey CE 7.5.1: a generated package imports with Upload &
+    install, installs as `<theme_name>-<version without dots>-ls7`, is assigned
+    with that name, and renders.
 
 ## [1.5.1] - 2026-10-14
 

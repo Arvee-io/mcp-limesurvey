@@ -611,10 +611,12 @@ created survey stays in place (deleting needs the `lifecycle` scope).
 
 ## Responsive Survey Themes
 
-The theme generator was verified on **2026-07-22** against the current
-**LimeSurvey CE 7.0.5** release, and on **2026-07-24** against the official
-**vanilla 3.0.1** ("Bootstrap Vanilla") manifest. LimeSurvey 7 is the default
-target; LimeSurvey 6 can be selected explicitly.
+The theme generator was last verified on **2026-10-14** against
+**LimeSurvey CE 7.5.1** (import with Upload & install, installed name,
+assignment with read-back, rendering). Earlier checks: **2026-07-22** against
+the then current **LimeSurvey CE 7.0.5** release, and **2026-07-24** against
+the official **vanilla 3.0.1** ("Bootstrap Vanilla") manifest. LimeSurvey 7 is
+the default target; LimeSurvey 6 can be selected explicitly.
 
 Generated themes:
 
@@ -634,10 +636,13 @@ LimeSurvey installs an uploaded theme under the ZIP file name without `.zip` and
 without dots, not under `theme_name`: `weit_feedback-1.0.0-ls7.zip` becomes
 `weit_feedback-100-ls7` (at most 45 characters). The generator, the validator,
 and the publication guide return this as `installed_theme_name`, and
-`limesurvey_assign_survey_theme` takes it. The validator follows the LimeSurvey
-7.5.1 import: errors mean LimeSurvey would refuse, skip, or not use something,
-while warnings starting with `policy:` mark what LimeSurvey accepts but the
-generator never produces (for example JavaScript or another parent theme).
+`limesurvey_assign_survey_theme` takes it. Versions with the same digits
+(`1.10.0`, `11.0.0`) give the same installed name; the generator warns about
+them. The validator follows the LimeSurvey 7.5.1 import: errors are limited to
+archive safety and what LimeSurvey would refuse, skip, or not use, while
+warnings starting with `policy:` mark what LimeSurvey accepts but the generator
+never produces (for example JavaScript, another parent theme, a missing
+`LICENSE.txt`, or external URLs in CSS).
 
 Recommended tool sequence:
 
@@ -649,7 +654,8 @@ Recommended tool sequence:
 5. Test an inactive survey on phone, tablet, desktop, keyboard, zoom, RTL, and print
 6. `limesurvey_assign_survey_theme` with `installed_theme_name` and
    `confirm_theme_assignment=true`; it reads the template back and fails with
-   `THEME_NOT_APPLIED` when LimeSurvey kept another theme
+   `THEME_NOT_APPLIED` when LimeSurvey kept another theme (`THEME_NOT_VERIFIED`
+   when only the read-back fails)
 
 See [Survey Theme Guide](docs/SURVEY_THEMES.md) for complete examples,
 acceptance criteria, Cloud restrictions, community publication, and rollback.
