@@ -122,3 +122,13 @@ test("[GEN-PARITY] unescapeHtml (the exact Python port) still drops a reference 
   assert.equal(unescapeHtml("a&#1;b"), "ab");
   assert.equal(unescapeHtml("&&#1;amp;"), "&amp;");
 });
+
+test("[GEN-PARITY] unescapeHtmlSafe is idempotent when a decoded character builds a new reference with its neighbours", () => {
+  // "&&#97;uml;" decodes once to "&auml;", which is a reference again; the safe variant decodes to a fixed point.
+  for (const input of ["&&#97;uml;", "&&#x61;mp;x", "&&#110;bsp;", "a&&#97;uml;&&#111;uml;b"]) {
+    const once = unescapeHtmlSafe(input);
+    assert.equal(unescapeHtmlSafe(once), once, `input ${JSON.stringify(input)}`);
+  }
+  assert.equal(unescapeHtmlSafe("&&#97;uml;"), "\u00e4");
+  assert.equal(unescapeHtmlSafe("&&#x61;mp;x"), "&amp;x");
+});
