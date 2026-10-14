@@ -72,6 +72,61 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - An empty question, subquestion or answer text is a warning instead of an error;
   `default` is rejected on question types where LimeSurvey never uses it.
 
+### Fixed
+
+- Survey themes on LimeSurvey 7, based on user feedback. LimeSurvey installs an
+  uploaded theme under the ZIP file name without `.zip` and without dots, so a
+  generated package `weit_feedback-1.0.0-ls7.zip` becomes
+  `weit_feedback-100-ls7`, which `limesurvey_assign_survey_theme` could not take;
+  assigning `weit_feedback` reported success while LimeSurvey kept the default
+  theme.
+  - `limesurvey_generate_survey_theme` returns `installed_theme_name`, writes it
+    as `metadata/name`, and refuses a `theme_name` whose installed name would
+    exceed LimeSurvey's 45 characters (`THEME_NAME_TOO_LONG`) before writing. A
+    version component with more than one digit gives a warning, because the
+    installed name drops the dots (`1.10.0` and `11.0.0` both become `1100`).
+    `THEME_NAME_TOO_LONG` asks for a shorter `theme_version` when the version
+    alone is too long. A JPEG logo is checked by its first bytes only.
+  - `limesurvey_assign_survey_theme` takes installed names (1–45 ASCII letters,
+    digits, `_`, `-`; `inherit` is refused, because the read-back cannot confirm
+    the theme a survey group passes on). It reads the current theme first and
+    writes nothing when that fails (`THEME_PREVIOUS_UNKNOWN`, `written: false`),
+    reads the template back after `set_survey_properties`, and fails with
+    `THEME_NOT_APPLIED` when LimeSurvey stored another theme or refused to save
+    the survey (`{"template": false}`), or with `THEME_NOT_VERIFIED`
+    (`written: true`) when the read-back fails or has no template; a match
+    returns `verified: true`. Results and `THEME_NOT_APPLIED` name
+    `previous_theme` and `changed`, with a restore hint (for `inherit` through
+    `limesurvey_set_survey_properties`).
+  - `limesurvey_validate_survey_theme` follows the LimeSurvey 7.5.1 import and
+    returns `installed_theme_name`; `valid` means LimeSurvey imports and uses the
+    package. Errors remain only for archive safety (more than 1000 entries,
+    unsafe paths, size limits, CRC-32 mismatches, content signatures) and real
+    import obstacles: an installed name over 45 characters or with other
+    characters, files the import would skip (such as `.html` in `views/`), a
+    `config.xml` that is not well-formed or not at the root, a missing
+    `metadata/title` or `views/`. The archive checks use the ZIP metadata and
+    stop before anything is decompressed; entries are then read one at a time
+    with a size cap. Now allowed: web fonts (`woff2`, `woff`, `ttf`, `otf` with a
+    signature check, `eot`), `txt`/`md` anywhere, `gif`/`ico`, and subfolders in
+    `css/` and `files/`. The generator's own rules are `policy:` warnings
+    instead of errors: JavaScript, source maps, JSON, Twig templates, files
+    without an extension, a parent other than `vanilla`, a `type` other than
+    `theme`, a missing 7.x compatibility entry, a missing `css/mcp-theme.css`,
+    `LICENSE.txt` or GPL license, missing small-screen, reduced-motion or focus
+    rules, more than 50 entries, and `@import`, expressions or external URLs in
+    any CSS file.
+  - `limesurvey_get_theme_publication_guide` returns `installed_theme_name` and
+    explains the import through the theme list: review every `policy:` warning
+    first, do not rename the ZIP, avoid the replacement upload form behind "This
+    theme type ('') is not allowed.", delete a theme folder left behind by a
+    failed import, treat a new version as a new theme, and mind versions with the
+    same digits. `current_reference` keeps `current_ce_release` next to the new
+    fields.
+  - Verified on LimeSurvey CE 7.5.1: a generated package imports with Upload &
+    install, installs as `<theme_name>-<version without dots>-ls7`, is assigned
+    with that name, and renders.
+
 ## [1.5.1] - 2026-10-14
 
 ### Fixed
