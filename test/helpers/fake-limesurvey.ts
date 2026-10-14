@@ -669,7 +669,9 @@ export class FakeLimeSurvey {
     const defaults = ATTRIBUTE_DEFAULTS[theme] ?? {};
     const wanted = (name: string): boolean => (language === null ? !I18N_ATTRIBUTES.has(name) : I18N_ATTRIBUTES.has(name));
     const stored = this.attributes.filter((item) => item.qid === question.qid && wanted(item.attribute) && item.language === (language ?? ""));
-    const names = new Set([...Object.keys(defaults).filter(wanted), ...stored.map((item) => item.attribute)]);
+    // HiddenQuestionAttributeProvider adds "image" to every question type (default ""); live 6.17.11 and 7.5.1 report it.
+    const hidden = language === null ? ["image"] : [];
+    const names = new Set([...Object.keys(defaults).filter(wanted), ...hidden, ...stored.map((item) => item.attribute)]);
     const values: Record<string, string> = {};
     for (const name of [...names].sort((a, b) => a.localeCompare(b, "en", { numeric: true, sensitivity: "base" }))) {
       values[name] = stored.find((item) => item.attribute === name)?.value ?? defaults[name] ?? "";
