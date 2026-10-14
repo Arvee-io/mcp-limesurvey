@@ -92,3 +92,33 @@ test("[GEN-PARITY] unescapeHtmlSafe is idempotent for every case", () => {
     assert.equal(unescapeHtmlSafe(once), once, `input ${JSON.stringify(input)}`);
   }
 });
+
+// A reference to a dropped code point (&#1;, &#x1F;, &#127;) decodes to the empty string. Removing it would glue the
+// text around it together and can build a new reference ("&&#1;amp;" -> "&amp;", "&&#1;auml;" -> "&auml;" -> "ä"), so
+// such a reference stays as written (like one that decodes to a markup character).
+const emptyResultExamples: Array<[string, string]> = [
+  ["&&#1;amp;", "&&#1;amp;"],
+  ["&&#1;auml;", "&&#1;auml;"],
+  ["&&#x1F;ouml;", "&&#x1F;ouml;"],
+  ["&&#127;uuml;", "&&#127;uuml;"],
+  ["a&#1;b", "a&#1;b"],
+  ["x &#8;&#xB; y", "x &#8;&#xB; y"],
+];
+
+test("[GEN-PARITY] unescapeHtmlSafe keeps a reference that decodes to the empty string (a dropped code point)", () => {
+  for (const [input, expected] of emptyResultExamples) {
+    assert.equal(unescapeHtmlSafe(input), expected, `input ${JSON.stringify(input)}`);
+  }
+});
+
+test("[GEN-PARITY] unescapeHtmlSafe is idempotent when a reference to a dropped code point sits between & and a name", () => {
+  for (const [input] of emptyResultExamples) {
+    const once = unescapeHtmlSafe(input);
+    assert.equal(unescapeHtmlSafe(once), once, `input ${JSON.stringify(input)}`);
+  }
+});
+
+test("[GEN-PARITY] unescapeHtml (the exact Python port) still drops a reference to a dropped code point", () => {
+  assert.equal(unescapeHtml("a&#1;b"), "ab");
+  assert.equal(unescapeHtml("&&#1;amp;"), "&amp;");
+});

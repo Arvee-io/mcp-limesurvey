@@ -28,8 +28,8 @@ interface Validation {
   summary: unknown;
 }
 
-async function withSession<T>(run: (session: Session) => Promise<T>): Promise<T> {
-  const session = await connectFake();
+async function withSession<T>(run: (session: Session) => Promise<T>, config?: ReturnType<typeof envConfig>): Promise<T> {
+  const session = await connectFake(config === undefined ? {} : { config });
   try {
     return await run(session);
   } finally {
@@ -320,3 +320,175 @@ test("[GEN-E] validate_spec with survey_id reads the survey (read methods only, 
     await reader.close();
   }
 });
+
+// ---- Review of PR2, finding 1: a language code may appear once, and not as the base language ----
+
+const duplicateLanguageCases: Array<{ label: string; survey: Spec; path: string; fineAt?: string }> = [
+  {
+    label: "a language listed twice",
+    survey: { title: "Titel", additional_languages: ["en", "en"] },
+    path: "survey.additional_languages[1]",
+    fineAt: "survey.additional_languages[0]",
+  },
+  {
+    label: "a language listed twice in another case",
+    survey: { title: "Titel", additional_languages: ["en", "EN"] },
+    path: "survey.additional_languages[1]",
+    fineAt: "survey.additional_languages[0]",
+  },
+  {
+    label: "the base language as additional language",
+    survey: { title: "Titel", language: "de", additional_languages: ["de"] },
+    path: "survey.additional_languages[0]",
+  },
+  {
+    label: "the base language as additional language in another case",
+    survey: { title: "Titel", language: "de", additional_languages: ["en", "DE"] },
+    path: "survey.additional_languages[1]",
+    fineAt: "survey.additional_languages[0]",
+  },
+  {
+    label: "the default base language de as additional language",
+    survey: { title: "Titel", additional_languages: ["de"] },
+    path: "survey.additional_languages[0]",
+  },
+];
+
+for (const { label, survey, path, fineAt } of duplicateLanguageCases) {
+  test(`[GEN-E] validate_spec rejects ${label}, at ${path}`, async () => {
+    await withSession(async (session) => {
+      const result = await validate(session, surveyWith([question("Q01")], survey));
+      errorAt(result, path);
+      if (fineAt !== undefined) assert.ok(!result.errors.some((item) => item.path === fineAt), `${fineAt} is the first occurrence and fine`);
+    });
+  });
+}
+
+test("[GEN-E] validate_spec accepts different additional languages", async () => {
+  await withSession(async (session) => {
+    const result = await validate(session, surveyWith([question("Q01")], { title: "Titel", language: "de", additional_languages: ["en", "fr", "pt-BR"] }));
+    assert.equal(result.valid, true, JSON.stringify(result.errors));
+  });
+});
+
+// ---- Review of PR2, finding 5: the error list stays within LIMESURVEY_MAX_RESPONSE_CHARS ----
+
+/** A survey spec whose every question has an invalid code (a digit first): one error per question. */
+const manyBadQuestions = (count: number): Spec => surveyWith(
+  Array.from({ length: count }, (_unused, index) => question(`${index}A`)),
+);
+
+test("[GEN-E] validate_spec keeps the error list within LIMESURVEY_MAX_RESPONSE_CHARS and reports errors_total and truncated", async () => {
+  const limit = 4000;
+  await withSession(async (session) => {
+    const response = await session.client.callTool({ name: TOOL, arguments: { spec: manyBadQuestions(300) } });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent ?? response.content).slice(0, 500));
+    const size = JSON.stringify(response.structuredContent).length;
+    assert.ok(size <= limit, `the result has ${size} characters, the limit is ${limit}`);
+    const result = resultOf(response) as Validation & { errors_total?: number; truncated?: boolean };
+    assert.equal(result.valid, false);
+    assert.ok(typeof result.errors_total === "number" && result.errors_total >= 300, `errors_total: ${String(result.errors_total)}`);
+    assert.equal(result.truncated, true);
+    assert.ok(result.errors.length >= 1, "the cut list still shows the first errors");
+    assert.ok(result.errors.length < (result.errors_total ?? 0), "the list is shorter than the total");
+    assert.equal(result.errors[0]?.path, `${Q0}.code`, "the cut keeps the errors from the start");
+    assert.deepEqual(session.fake.requests, []);
+  }, envConfig({ LIMESURVEY_MAX_RESPONSE_CHARS: String(limit) }));
+});
+
+test("[GEN-E] validate_spec reports errors_total equal to the list and truncated false when nothing is cut", async () => {
+  await withSession(async (session) => {
+    const result = await validate(session, surveyWith([question("1A"), question("Q02", { type: "Z" })])) as Validation & {
+      errors_total?: number;
+      truncated?: boolean;
+    };
+    assert.ok(result.errors.length >= 2, JSON.stringify(result.errors));
+    assert.equal(result.errors_total, result.errors.length);
+    assert.equal(result.truncated, false);
+  });
+});
+
+// ---- Review of PR2, finding 7: texts, attribute names, survey.format and survey.expires ----
+
+const BAD_TEXTS: Array<[string, string]> = [
+  ["U+FFFE", "a￾b"],
+  ["U+FFFF", "a￿b"],
+  ["a lone high surrogate", "a\uD800b"],
+  ["a lone low surrogate", "a\uDC00b"],
+  ["a high surrogate at the end", "ab\uD83D"],
+];
+
+for (const [label, text] of BAD_TEXTS) {
+  test(`[GEN-E] validate_spec rejects a text with ${label}, at the text`, async () => {
+    await withSession(async (session) => {
+      const result = await validate(session, surveyWith([question("Q01", { text })]));
+      errorAt(result, `${Q0}.text`);
+    });
+  });
+}
+
+test("[GEN-E] validate_spec accepts a text with a complete surrogate pair (an emoji)", async () => {
+  await withSession(async (session) => {
+    const result = await validate(session, surveyWith([question("Q01", { text: "Gut \u{1F600} und \u{1F44D}" })]));
+    assert.equal(result.valid, true, JSON.stringify(result.errors));
+  });
+});
+
+const BAD_ATTRIBUTE_NAMES: Array<[string, string]> = [
+  ["a control character", "a\u0001b"],
+  ["an empty name", ""],
+  ["a leading digit", "1abc"],
+  ["a hyphen", "a-b"],
+  ["51 characters", `a${"b".repeat(50)}`],
+];
+
+for (const [label, name] of BAD_ATTRIBUTE_NAMES) {
+  test(`[GEN-E] validate_spec rejects an attribute name with ${label}, at attributes.<name>`, async () => {
+    await withSession(async (session) => {
+      const result = await validate(session, surveyWith([question("Q01", { attributes: { [name]: "1" } })]));
+      errorAt(result, `${Q0}.attributes.${name}`);
+    });
+  });
+}
+
+test("[GEN-E] validate_spec accepts attribute names of 1 to 50 letters, digits and underscores that start with a letter", async () => {
+  await withSession(async (session) => {
+    const names = ["display_columns", "A1_b", "x", `a${"b".repeat(49)}`];
+    const result = await validate(session, surveyWith([question("Q01", { attributes: Object.fromEntries(names.map((name) => [name, "1"])) })]));
+    assert.ok(!result.errors.some((item) => item.path.startsWith(`${Q0}.attributes`)), JSON.stringify(result.errors));
+  });
+});
+
+test("[GEN-E] validate_spec rejects survey.format X at survey.format", async () => {
+  await withSession(async (session) => {
+    const result = await validate(session, surveyWith([question("Q01")], { title: "Titel", format: "X" }));
+    errorAt(result, "survey.format");
+  });
+});
+
+for (const format of ["G", "A", "S"]) {
+  test(`[GEN-E] validate_spec accepts survey.format ${format}`, async () => {
+    await withSession(async (session) => {
+      const result = await validate(session, surveyWith([question("Q01")], { title: "Titel", format }));
+      assert.ok(!result.errors.some((item) => item.path === "survey.format"), JSON.stringify(result.errors));
+    });
+  });
+}
+
+for (const expires of ["2026-13-45", "2026-02-30 10:00:00", "2026-02-29", "2026-06-15 10:61:00"]) {
+  test(`[GEN-E] validate_spec rejects survey.expires ${expires} (not a valid date), at survey.expires`, async () => {
+    await withSession(async (session) => {
+      const result = await validate(session, surveyWith([question("Q01")], { title: "Titel", expires }));
+      errorAt(result, "survey.expires");
+    });
+  });
+}
+
+for (const expires of ["2028-02-29", "2026-12-31", "2026-12-31 23:59:59", "2026-01-01 00:00:00"]) {
+  test(`[GEN-E] validate_spec accepts the real date survey.expires ${expires}`, async () => {
+    await withSession(async (session) => {
+      const result = await validate(session, surveyWith([question("Q01")], { title: "Titel", expires }));
+      assert.ok(!result.errors.some((item) => item.path === "survey.expires"), JSON.stringify(result.errors));
+    });
+  });
+}
