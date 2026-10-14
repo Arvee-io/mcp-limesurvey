@@ -81,14 +81,16 @@ test("generates and validates a responsive LimeSurvey 7 theme package", async ()
   }
 });
 
-test("rejects a theme package that extends fruity_twentythree instead of vanilla", async () => {
+// LimeSurvey 7 imports a theme with any installed parent, so a parent other than vanilla is only the generator's
+// policy: a "policy:" warning, not an error.
+test("[THEME-9] reports a theme package that extends fruity_twentythree instead of vanilla as a policy warning", async () => {
   const themeDir = await mkdtemp(path.join(os.tmpdir(), "limesurvey-mcp-theme-parent-"));
   const { server, mcpClient } = await connected({ ...baseConfig, themeDir });
   try {
     const legacyManifest = `<?xml version="1.0" encoding="UTF-8"?>
 <config>
   <metadata>
-    <name>legacy_parent</name>
+    <name>legacy_parent-100-ls7</name>
     <title>Legacy Parent</title>
     <type>theme</type>
     <author>Test Author</author>
@@ -114,6 +116,7 @@ test("rejects a theme package that extends fruity_twentythree instead of vanilla
       "@media (max-width: 575.98px) { body { color: red; } }\n:focus-visible { outline: none; }\n/* prefers-reduced-motion */\n",
     );
     zip.file("LICENSE.txt", "GNU General Public License version 2 or later\n");
+    zip.file("views/README.txt", "Inherited views.\n");
     const archive = await zip.generateAsync({ type: "nodebuffer" });
     const fileName = "legacy_parent-1.0.0-ls7.zip";
     await writeFile(path.join(themeDir, fileName), archive, { mode: 0o600 });
@@ -123,9 +126,15 @@ test("rejects a theme package that extends fruity_twentythree instead of vanilla
       arguments: { file_name: fileName },
     });
     assert.equal(validated.isError, undefined);
-    const validationContent = validated.structuredContent as { result: { valid: boolean; errors: string[] } };
-    assert.equal(validationContent.result.valid, false);
-    assert.ok(validationContent.result.errors.some((error) => error === "Manifest must extend vanilla."));
+    const validationContent = validated.structuredContent as {
+      result: { valid: boolean; errors: string[]; warnings: string[] };
+    };
+    assert.deepEqual(validationContent.result.errors, []);
+    assert.equal(validationContent.result.valid, true);
+    assert.ok(
+      validationContent.result.warnings.some((warning) => warning.startsWith("policy:") && warning.includes("vanilla")),
+      JSON.stringify(validationContent.result.warnings),
+    );
   } finally {
     await mcpClient.close();
     await server.close();
@@ -219,7 +228,10 @@ test("assigns an installed theme through set_survey_properties", async () => {
   const mockFetch: typeof fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
     requests.push(request);
-    const result = request.method === "get_session_key" ? "session-theme" : { template: true };
+    // get_survey_properties reads the assigned template back, so the assignment counts as applied.
+    const result = request.method === "get_session_key"
+      ? "session-theme"
+      : request.method === "get_survey_properties" ? { template: "weit_feedback" } : { template: true };
     return new Response(JSON.stringify({ id: request.id, result, error: null }));
   };
   const { server, mcpClient } = await connected(baseConfig, mockFetch);
