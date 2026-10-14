@@ -579,6 +579,17 @@ export interface OutlineGroup {
   questions: OutlineQuestion[];
 }
 
+/**
+ * A text without a row in an additional language, with what it belongs to: a group (group_id), a question (question_code,
+ * question_id) or a subquestion (its question's code and id plus subquestion_code).
+ */
+export interface TranslationGap extends MissingTranslation {
+  group_id?: number;
+  question_code?: string;
+  question_id?: number;
+  subquestion_code?: string;
+}
+
 /** What the add tools need of a survey before they write: structure, codes and ids, and (on request) the translation gaps. */
 export interface SurveyOutline {
   languages: string[];
@@ -595,7 +606,7 @@ export interface SurveyOutline {
    * With options.gaps: the group, question and subquestion texts that have a row in the base language but none in an
    * additional language (paths of the whole survey). fixLanguageConsistency fills exactly these from the base language.
    */
-  gaps: MissingTranslation[];
+  gaps: TranslationGap[];
 }
 
 const byGroupOrder = (a: Row, b: Row): number => (
@@ -620,7 +631,7 @@ export async function readSurveyOutline(client: RpcClient, surveyId: number, opt
   const mains = baseQuestions.filter(isMainQuestion);
   const mainsOf = (gid: string): Row[] => mains.filter((row) => str(row.gid) === gid).sort(byQuestionOrder);
 
-  const gaps: MissingTranslation[] = [];
+  const gaps: TranslationGap[] = [];
   if (options.gaps === true) {
     const groupsIn = listed.map((_language, index) => new Map((groupLists[index] ?? []).map((row) => [str(row.gid), row] as const)));
     const questionsIn = listed.map((_language, index) => new Map((questionLists[index] ?? []).map((row) => [str(row.qid), row] as const)));
@@ -631,18 +642,24 @@ export async function readSurveyOutline(client: RpcClient, surveyId: number, opt
     );
     baseGroups.forEach((groupRow, groupIndex) => {
       const gid = str(groupRow.gid);
+      const group_id = num(groupRow.gid);
       for (const language of lacking(groupsIn, gid, "group_name")) {
-        gaps.push({ path: `groups[${groupIndex}].title`, language }, { path: `groups[${groupIndex}].description`, language });
+        gaps.push({ path: `groups[${groupIndex}].title`, language, group_id }, { path: `groups[${groupIndex}].description`, language, group_id });
       }
       mainsOf(gid).forEach((questionRow, questionIndex) => {
         const qid = str(questionRow.qid);
+        const owner = { question_code: str(questionRow.title), question_id: num(questionRow.qid) };
         const path = `groups[${groupIndex}].questions[${questionIndex}]`;
-        for (const language of lacking(questionsIn, qid, "question")) gaps.push({ path: `${path}.text`, language }, { path: `${path}.help`, language });
+        for (const language of lacking(questionsIn, qid, "question")) {
+          gaps.push({ path: `${path}.text`, language, ...owner }, { path: `${path}.help`, language, ...owner });
+        }
         const subs = baseQuestions.filter((row) => !isMainQuestion(row) && str(row.parent_qid) === qid).sort(bySubquestionOrder);
         // LimeSurvey 7 stores the entries of a Ranking question as subquestions; the spec calls them answers.
         const list = str(questionRow.type) === "R" ? "answers" : "subquestions";
         subs.forEach((sub, subIndex) => {
-          for (const language of lacking(questionsIn, str(sub.qid), "question")) gaps.push({ path: `${path}.${list}[${subIndex}].text`, language });
+          for (const language of lacking(questionsIn, str(sub.qid), "question")) {
+            gaps.push({ path: `${path}.${list}[${subIndex}].text`, language, ...owner, subquestion_code: str(sub.title) });
+          }
         });
       });
     });

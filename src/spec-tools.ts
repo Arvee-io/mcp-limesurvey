@@ -508,10 +508,14 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "POSITION_INVALID write nothing. The question is imported (import_question) and only the new question is moved to "
         + "its place; no other question is changed. It is then read back and compared with the spec. Returns { survey_id, "
         + "group_id, question_id, code, position { index }, verification { ok, differences, differences_total, truncated }, "
-        + "side_effects, warnings }; a difference is a finding, not an error. side_effects names texts of other groups and "
-        + "questions without a row in an additional language: import_question fills them with the base-language text, and "
-        + "that is not undone. If a step after the import fails, the new question is deleted again (nothing else) and "
-        + "ADD_QUESTION_FAILED reports failed_step, rolled_back and manual_cleanup. An active survey is refused. A whole "
+        + "side_effects, warnings }; a difference is a finding, not an error. import_question fills every text of the survey "
+        + "that has no row in an additional language with the base-language text, which cannot be undone: if the survey "
+        + "has such gaps, the tool answers TRANSLATION_GAPS (the gaps with path, language and question or group) and writes "
+        + "nothing, unless acknowledge contains fill_translation_gaps; side_effects then lists the filled gaps (paths as "
+        + "after the insertion). If a step after the import fails, the new question is deleted again (nothing else) and "
+        + "ADD_QUESTION_FAILED reports failed_step, rolled_back, manual_cleanup and cause_code. If the outcome of the import "
+        + "itself is unknown (lost answer, an error after the creation), nothing is deleted: created is \"unknown\" and "
+        + "candidates and cleanup_hint say what to check. An active survey is refused. A whole "
         + "group goes with limesurvey_add_group_from_spec. A Ranking question makes the tool read the LimeSurvey generation "
         + "once (entries as subquestions on 7, as answers on 6). The question types 1, : and ; are not supported yet. Needs "
         + "the write scope content.",
@@ -524,12 +528,16 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
           z.strictObject({ before: z.string().min(1).describe("Code of the question the new one goes in front of.") }),
           z.strictObject({ after: z.string().min(1).describe("Code of the question the new one goes behind.") }),
         ]).optional().describe("1-based place in the group, { before: code } or { after: code }; default: the end of the group."),
+        acknowledge: z.array(z.enum(["fill_translation_gaps"])).optional().describe(
+          "Confirmed risks. fill_translation_gaps: the import may fill texts of the survey that have no row in an additional "
+          + "language with the base-language text (otherwise such gaps answer TRANSLATION_GAPS).",
+        ),
       }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async (input) => {
-      const created: CreatedIds = { questions: new Set(), groups: new Set() };
+      const created: CreatedIds = { surveyId: input.survey_id, questions: new Set(), groups: new Set() };
       return runScoped(
         config,
         client,
@@ -555,7 +563,9 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "back and compared with the spec. Returns { survey_id, group_id, position { index }, questions [{ code, "
         + "question_id }], verification { ok, differences, differences_total, truncated }, side_effects, warnings }; a "
         + "difference is a finding, not an error. If a step after the import fails, the new group is deleted again (nothing "
-        + "else) and ADD_GROUP_FAILED reports failed_step, rolled_back and manual_cleanup. An active survey is refused. A "
+        + "else) and ADD_GROUP_FAILED reports failed_step, rolled_back, manual_cleanup and cause_code. If the outcome of the "
+        + "import itself is unknown (lost answer, an unexpected answer), nothing is deleted: created is \"unknown\" and "
+        + "candidates and cleanup_hint say what to check. The .lsg import fills no translation gaps. An active survey is refused. A "
         + "single question goes with limesurvey_add_question_from_spec. A Ranking question makes the tool read the "
         + "LimeSurvey generation once (entries as subquestions on 7, as answers on 6). The question types 1, : and ; are not "
         + "supported yet. Needs the write scope content.",
@@ -572,7 +582,7 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async (input) => {
-      const created: CreatedIds = { questions: new Set(), groups: new Set() };
+      const created: CreatedIds = { surveyId: input.survey_id, questions: new Set(), groups: new Set() };
       return runScoped(
         config,
         client,

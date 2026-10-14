@@ -32,6 +32,8 @@ const CONTENT_WRITE_METHODS: ReadonlySet<string> = new Set([
 
 /** The ids a tool call created itself (taken from its own import answer, not in the survey before): its rollback. */
 export interface CreatedIds {
+  /** The survey of the call: delete_group(sid, gid) passes only for this sid. */
+  surveyId: number;
   questions: Set<number>;
   groups: Set<number>;
 }
@@ -55,9 +57,9 @@ const idOf = (value: JsonValue | undefined): number => (typeof value === "number
 function isAllowed(level: ClientLevel, method: string, params: JsonValue[], writes: ReadonlySet<string>, created?: CreatedIds): boolean {
   if (READ_METHOD.test(method)) return true;
   if (level === "none") return false;
-  // delete_question(qid) and delete_group(sid, gid): only what this call created.
+  // delete_question(qid) and delete_group(sid, gid): only what this call created, a group only in the survey of the call.
   if (method === "delete_question") return created?.questions.has(idOf(params[0])) === true;
-  if (method === "delete_group") return created?.groups.has(idOf(params[1])) === true;
+  if (method === "delete_group") return created !== undefined && idOf(params[0]) === created.surveyId && created.groups.has(idOf(params[1]));
   if (!writes.has(method)) return false;
   // A .lsa archive activates the survey and imports participants and responses.
   if (method === "import_survey" && String(params[1]).trim().toLowerCase() === "lsa") return false;
