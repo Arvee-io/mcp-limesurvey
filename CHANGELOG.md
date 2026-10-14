@@ -21,6 +21,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   cases for all 26 question types it supports).
 - `tools/build-attribute-defaults.mjs` and `tools/build-html-entities.py` generate
   the attribute default table and the HTML entity table (not part of the package).
+- `limesurvey_get_survey_spec` (write scope `none`) reads a survey, one group, or
+  one question as a spec in the format the write tools take, with `ids`,
+  `position`, a `fingerprint`, `unreadable` (what RemoteControl cannot read) and
+  `missing_translations`; too large surveys give `SPEC_TOO_LARGE` with an outline
+  per group. Surveys built in the admin UI read back with their extended question
+  themes, non-default attributes, default values and scripts.
+- Texts per language: every text field of a spec takes a string or a map per
+  language; new structure must cover exactly the survey languages.
+  Language-dependent attributes are written once per language.
 
 ### Changed
 
@@ -30,6 +39,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   regard to case, language codes and XML control characters are checked, and
   embedded `data:` URIs are rejected. HTML entities that stand for markup
   characters, or that lack the closing semicolon, are no longer decoded.
+- Language-dependent attributes such as `prefix` or `em_validation_q_tip` are
+  written with one row per language. The Python generator wrote them without a
+  language, and LimeSurvey ignores such rows, so the setting had no effect.
 
 ## [1.5.1] - 2026-10-14
 
