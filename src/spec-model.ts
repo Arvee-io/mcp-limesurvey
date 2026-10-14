@@ -2,7 +2,8 @@
  * The survey description ("spec") the generator tools take: constants, types and the normalisation that fills in
  * defaults. Version 2 of the spec format (version 1 is the one of the plugin's Python generator and stays valid):
  * every text is one string (it counts for every language of the survey) or a map per language, and questions carry
- * default values, a script and the columns LimeSurvey stores. The question types 1, : and ; are not supported yet.
+ * default values, a script and the columns LimeSurvey stores. Version 2 also covers the array types with a second scale
+ * (1, : and ;): their subquestions or answers carry scale_id.
  */
 import { ATTRIBUTE_DEFAULTS, I18N_ATTRIBUTES } from "./attribute-defaults.js";
 import { unescapeHtmlSafe } from "./html-unescape.js";
@@ -12,10 +13,27 @@ export type SpecKind = "survey" | "group" | "question";
 /** Texts per language, for example { de: "Ja", en: "Yes" }. */
 export type TextMap = Record<string, string>;
 
-/** Question types this version can write (Python: SUPPORTED_TYPES). */
-export const SUPPORTED_TYPES: ReadonlySet<string> = new Set("XL!OMYNSTQ5FARKBCEHPDGUI*|");
-/** Types that LimeSurvey knows but this version rejects, because they need a second subquestion or answer scale. */
+/**
+ * Question types this version can write: the 29 core types of LimeSurvey 6 and 7 (research-gen-types.md section 1 and 5:
+ * QuestionType.php:19-47 in both versions). The Python generator knows the first 26 (its SUPPORTED_TYPES).
+ */
+export const SUPPORTED_TYPES: ReadonlySet<string> = new Set("XL!OMYNSTQ5FARKBCEHPDGUI*|1:;");
+/**
+ * The array types with a second scale (research-gen-types.md section 2). Their subquestions or answers carry scale_id,
+ * and LimeSurvey evaluates no default value for them, neither on the question nor on a subquestion (hasdefaultvalues 0 in
+ * config.xml of arrays/dualscale, arrays/multiflexi and arrays/texts, CX(*):18-24).
+ */
 export const TWO_SCALE_TYPES: ReadonlySet<string> = new Set(["1", ":", ";"]);
+/**
+ * Subquestions on two scales: 0 = rows (Y), 1 = columns (X) (subquestions 2 in CX(arrays/multiflexi):20-21 and
+ * CX(arrays/texts):20-21; createFieldMap takes scale_id 1 as the columns, common_helper.php:1872-1926).
+ */
+export const TWO_SUBQUESTION_SCALES: ReadonlySet<string> = new Set([":", ";"]);
+/**
+ * Answers on two scales (answerscales 2 in CX(arrays/dualscale):21; RenderArrayMultiscale.php:68-89). The subquestions of
+ * type 1 stay on scale 0: only scale 0 is rendered (RenderArrayMultiscale.php:165-167, 216-220).
+ */
+export const TWO_ANSWER_SCALES: ReadonlySet<string> = new Set(["1"]);
 export const NEED_SUBQUESTIONS: ReadonlySet<string> = new Set("MQAKBCEP"); // M options are subquestions
 export const NEED_ANSWERS: ReadonlySet<string> = new Set("L!OR");
 export const NEED_BOTH: ReadonlySet<string> = new Set("FH"); // rows = subquestions, columns = answers
@@ -91,8 +109,8 @@ export const QUESTION_KEYS = [
   "default", "default_other", "script", "preg", "question_theme_name", "encrypted", "same_default", "same_script",
   "modulename",
 ] as const;
-export const SUBQUESTION_KEYS = ["code", "text", "relevance", "default"] as const;
-export const ANSWER_KEYS = ["code", "text", "assessment_value", "relevance"] as const;
+export const SUBQUESTION_KEYS = ["code", "text", "scale_id", "relevance", "default"] as const;
+export const ANSWER_KEYS = ["code", "text", "assessment_value", "scale_id", "relevance"] as const;
 
 export const SURVEY_DEFAULTS = {
   language: "de",
@@ -135,6 +153,8 @@ export interface NormalAnswer {
   code: string;
   text: TextMap;
   assessment_value: number;
+  /** 0, or 1 for the second answer scale of type 1. */
+  scale_id: number;
   /** Only an entry of a Ranking question on LimeSurvey 7 can have one other than 1. */
   relevance: string;
 }
@@ -142,6 +162,8 @@ export interface NormalAnswer {
 export interface NormalSubquestion {
   code: string;
   text: TextMap;
+  /** 0, or 1 for the columns of the types : and ;. */
+  scale_id: number;
   relevance: string;
   /** Default value per language; with same_default only the base language. Absent without a default. */
   default?: TextMap;
@@ -266,6 +288,11 @@ export function defaultTexts(value: unknown, languages: readonly string[], sameD
   return chosen === undefined ? undefined : { [base ?? chosen[0]]: chosen[1] };
 }
 
+/** The scale of a subquestion or answer: scale_id when it is a whole number, otherwise 0 (the only scale of most types). */
+export function scaleOf(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) ? value : 0;
+}
+
 function flag(value: unknown, fallback: boolean): boolean | "inherit" {
   if (value === "inherit") return "inherit";
   return truthy(value ?? fallback);
@@ -346,6 +373,7 @@ export function normalizeQuestion(question: unknown, languages: readonly string[
       return {
         code: asString(sub.code),
         text: expandText(sub.text, languages),
+        scale_id: scaleOf(sub.scale_id),
         relevance: asString(sub.relevance) || "1",
         ...(subDefault !== undefined ? { default: subDefault } : {}),
       };
@@ -354,6 +382,7 @@ export function normalizeQuestion(question: unknown, languages: readonly string[
       code: asString(answer.code),
       text: expandText(answer.text, languages),
       assessment_value: typeof answer.assessment_value === "number" ? Math.trunc(answer.assessment_value) : 0,
+      scale_id: scaleOf(answer.scale_id),
       relevance: asString(answer.relevance).trim() || "1",
     })),
     preg: asString(q.preg),

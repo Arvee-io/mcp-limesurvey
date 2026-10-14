@@ -196,6 +196,16 @@ function normalizeDefault(value: unknown, languages: readonly string[], sameDefa
   return (entries.find(([language]) => language === base) ?? entries[0])?.[1];
 }
 
+/**
+ * Subquestions or answers ordered by scale, stable within a scale (scale 0 before 1, then the order of the spec). LimeSurvey
+ * orders them the same way: subquestions by (scale_id, question_order), common_helper.php:3795; answers by scale and
+ * sortorder per scale (the generator numbers each scale from 0). So a spec that lists a scale-1 entry first compares equal
+ * with the survey it creates.
+ */
+function byScale<T extends { scale_id?: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => (a.scale_id ?? 0) - (b.scale_id ?? 0));
+}
+
 function normalizeQuestionForCompare(question: Record<string, unknown>, languages: readonly string[], cleaner: Cleaning): ComparableQuestion {
   const type = asString(question.type);
   const base = baseTheme(type);
@@ -225,7 +235,7 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
     relevance: cleanText(question.relevance) || "1",
     other: truthy(question.other),
     attributes: normalizeAttributes(question.attributes, extendedTheme || base, languages, cleaner),
-    subquestions: records(question.subquestions).map((item) => {
+    subquestions: byScale(records(question.subquestions).map((item) => {
       const subDefault = normalizeDefault(item.default, languages, sameDefault, cleaner);
       return {
         code: cleanText(item.code),
@@ -234,14 +244,14 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
         ...relevanceOf(item),
         ...(subDefault !== undefined ? { default: subDefault } : {}),
       };
-    }),
-    answers: records(question.answers).map((item) => ({
+    })),
+    answers: byScale(records(question.answers).map((item) => ({
       code: cleanText(item.code),
       text: textMap(item.text, languages, cleaner.text),
       assessment_value: integer(item.assessment_value),
       ...scale(item),
       ...relevanceOf(item),
-    })),
+    }))),
     ...(extendedTheme !== "" ? { question_theme_name: extendedTheme } : {}),
     ...(preg !== "" ? { preg } : {}),
     ...(truthy(question.encrypted) ? { encrypted: true as const } : {}),
