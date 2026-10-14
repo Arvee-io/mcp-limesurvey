@@ -79,6 +79,10 @@ async function load(root) {
 const v6 = await load(root6);
 const v7 = await load(root7);
 
+// HiddenQuestionAttributeProvider adds "image" (default "") to every question type outside the XML definitions;
+// get_question_properties reports it for every question in 6.17.11 and 7.5.1 (live runs).
+const HIDDEN_ATTRIBUTES = { image: "" };
+
 const themes = [...new Set([...Object.keys(v6.effective), ...Object.keys(v7.effective)])].sort();
 const table = {};
 let dropped = 0;
@@ -86,7 +90,7 @@ for (const theme of themes) {
   const a = v6.effective[theme] ?? {};
   const b = v7.effective[theme] ?? {};
   const names = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
-  const entries = {};
+  const entries = { ...HIDDEN_ATTRIBUTES };
   for (const name of names) {
     if (a[name] && b[name] && a[name].default !== b[name].default) { dropped += 1; continue; }
     entries[name] = (b[name] ?? a[name]).default;
