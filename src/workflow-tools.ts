@@ -15,17 +15,17 @@ import { buildRpcParams, jsonValueSchema, readImportFile, serverUtcOffsetSchema,
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
 import { assertWriteScope, effectiveWriteScope, scopeAllows, type WriteScope } from "./write-scope.js";
 
-const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
+export const outputSchema = z.object({ workflow: z.string(), result: jsonValueSchema });
 const surveyId = z.number().int().positive().describe("Numeric LimeSurvey survey ID.");
 const optionalLanguage = z.string().min(1).nullable().optional().describe("Optional LimeSurvey language code.");
 
-type WorkflowResult = {
+export type WorkflowResult = {
   content: Array<{ type: "text"; text: string }>;
   structuredContent: { workflow: string; result: JsonValue };
   isError?: true;
 };
 
-function text(workflow: string, result: JsonValue): WorkflowResult {
+export function text(workflow: string, result: JsonValue): WorkflowResult {
   const structuredContent = { workflow, result };
   return {
     content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
@@ -33,7 +33,7 @@ function text(workflow: string, result: JsonValue): WorkflowResult {
   };
 }
 
-function error(workflow: string, value: unknown): WorkflowResult {
+export function error(workflow: string, value: unknown): WorkflowResult {
   const result = { status: "error", ...describeError(value) } as JsonValue;
   return { ...text(workflow, result), isError: true };
 }

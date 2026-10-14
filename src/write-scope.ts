@@ -61,6 +61,8 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_export_statistics_to_file: "none",
   limesurvey_export_survey_to_file: "none",
   limesurvey_verify_survey_against_lss: "none",
+  // none: local spec check (reads the survey with read methods only when survey_id is given)
+  limesurvey_validate_spec: "none",
   // none: local-only theme tools and theme reads
   limesurvey_generate_survey_theme: "none",
   limesurvey_validate_survey_theme: "none",
@@ -83,6 +85,11 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   limesurvey_set_quota_properties: "content",
   limesurvey_assign_survey_theme: "content",
   limesurvey_replace_question: "content",
+  // Rule for deleting under "content" (spec tools): a call may only delete what it created itself (an id from its own
+  // import answer that was not in the survey before) or the one question it checked first; it never deletes a survey
+  // or a language. create_survey_from_spec deletes nothing: a survey it created stays, and the result reports sid
+  // and differences.
+  limesurvey_create_survey_from_spec: "content",
 
   // lifecycle
   limesurvey_activate_survey: "lifecycle",

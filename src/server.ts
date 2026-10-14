@@ -10,6 +10,7 @@ import {
 import { describeError, type JsonValue, type LimeSurveyConfig, type LimeSurveyToolResult } from "./types.js";
 import { registerWorkflowTools } from "./workflow-tools.js";
 import { registerThemeTools } from "./theme-tools.js";
+import { registerSpecTools } from "./spec-tools.js";
 import { assertWriteScope } from "./write-scope.js";
 
 const outputSchema = z.object({
@@ -118,6 +119,7 @@ export function createServer(
 
   registerWorkflowTools(server, client, config);
   registerThemeTools(server, client, config);
+  registerSpecTools(server, client, config);
 
   return { server, client };
 }
