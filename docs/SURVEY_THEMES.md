@@ -63,9 +63,29 @@ Tool: `limesurvey_generate_survey_theme`
 ```
 
 The result is a ZIP containing `config.xml` at the archive root,
-`css/mcp-theme.css`, and `LICENSE.txt`. An optional logo can be supplied as a
-base64 PNG or JPEG. SVG and JavaScript are intentionally rejected because
-LimeSurvey treats theme imports as an XSS-sensitive administrator capability.
+`css/mcp-theme.css`, `LICENSE.txt`, and `views/README.txt` (LimeSurvey 7 needs
+the theme's own `views/` directory even when it overrides no templates). An
+optional logo can be supplied as a base64 PNG or JPEG. The generator never adds
+SVG or JavaScript because LimeSurvey treats theme imports as an XSS-sensitive
+administrator capability.
+
+### Installed theme name
+
+LimeSurvey does not install the theme under `theme_name` or under the
+`metadata/name` of `config.xml`. It takes the name of the uploaded ZIP file
+without `.zip` and removes every dot. The generator names the ZIP
+`<theme_name>-<theme_version>-ls<major>.zip`, so the example above is
+installed as `weit_feedback-100-ls7`. The result returns this name as
+`installed_theme_name`, and `config.xml` carries the same value as
+`metadata/name`.
+
+- Upload the ZIP without renaming it, and assign `installed_theme_name`.
+- LimeSurvey allows at most 45 characters. The generator refuses a
+  `theme_name` that would exceed this before it writes anything; with
+  `theme_version` 1.0.0 the limit is 37 characters for `theme_name`.
+- Every version is a separate installed theme (`weit_feedback-110-ls7` after
+  `weit_feedback-100-ls7`), so the previous version stays available for
+  rollback.
 
 Generated themes are freely usable under GPL-2.0-or-later. This license is
 deliberate because the theme inherits the GPL-licensed `vanilla`.
@@ -80,14 +100,45 @@ Tool: `limesurvey_validate_survey_theme`
 }
 ```
 
-Continue only when `valid=true`. The validator checks:
+Continue only when `valid=true`: LimeSurvey imports and uses the package. The
+result includes `installed_theme_name`, derived from the file name. The rules
+follow the import code of LimeSurvey 7.5.1 with its default upload lists.
 
-- safe ZIP paths and compressed/uncompressed size limits;
-- `config.xml` at the archive root;
-- theme name, type, GPL license, parent, and major compatibility;
-- allowed CSS and image files plus image signatures;
-- absence of remote CSS imports, data URLs, and JavaScript expressions;
-- responsive rules, keyboard focus, and reduced-motion handling.
+Errors (`valid=false`):
+
+- an installed name longer than 45 characters, or with characters other than
+  ASCII letters, digits, `_`, and `-` (LimeSurvey rejects or changes
+  `#$%^&*()+=[]';,./{}|:<>?~`);
+- files the import would skip silently, leaving a "Partial import": every
+  type outside `css js map json eot otf ttf woff woff2 txt md xml twig lss lsa
+  lsq lsg gif ico jpg jpeg png`, for example `.html` (also in `views/`),
+  `.svg`, `.php`, or `.gitkeep`;
+- a missing or overlong (over 100 characters) `metadata/title`, a missing
+  `metadata/extends`, or a missing `views/` directory;
+- `config.xml` not at the archive root;
+- unsafe ZIP paths, more than 50 entries, and the size limits;
+- image and font content that does not match the extension (PNG, JPEG, GIF,
+  ICO, WOFF2, WOFF, TTF, OTF; EOT has no signature to check);
+- a missing GPL license, `css/mcp-theme.css`, `LICENSE.txt`, or responsive
+  small-screen rules, and remote CSS imports, data URLs, or JavaScript
+  expressions in the CSS;
+- a compatibility list without any 6.x or 7.x entry.
+
+Allowed without a finding: web fonts (`woff2 woff ttf otf eot`), `txt` and `md`
+files anywhere, `gif` and `ico` images, and subfolders in `css/` and `files/`.
+
+Warnings starting with `policy:` mark what LimeSurvey accepts but the generator
+never produces. They do not affect `valid`; review them before the import:
+
+- JavaScript, source maps, JSON, XML other than `config.xml`, survey exports,
+  and files without an extension;
+- a parent other than `vanilla` (it must be installed on the target instance);
+- `metadata/type` other than `theme`, and a `metadata/name` that differs from
+  the installed name (LimeSurvey ignores both);
+- no 7.x compatibility entry in a package that is not marked `-ls6`.
+
+LimeSurvey instances can change the allowed upload lists in `config.php`; the
+validator uses the defaults.
 
 ## Request installation instructions
 
@@ -103,19 +154,32 @@ Tool: `limesurvey_get_theme_publication_guide`
 }
 ```
 
-The tool compares the package major with the installed version and returns stop
-conditions, acceptance checks, Cloud guidance, and rollback steps. Set
-`publication_scope=community` for public distribution guidance.
+The tool compares the package major with the installed version and returns the
+`installed_theme_name` of the package, stop conditions, acceptance checks,
+Cloud guidance, and rollback steps. Set `publication_scope=community` for
+public distribution guidance.
 
 ## Import into LimeSurvey
 
 1. Sign in with a trusted account that has the global Templates import permission.
 2. Open **Configuration > Advanced > Themes**.
-3. Select **Survey themes** and start **Import**.
-4. Choose the validated ZIP from `LIMESURVEY_THEME_DIR`.
-5. Confirm that `vanilla` is recognized as the installed parent theme.
+3. Select **Survey themes** and start **Upload & install** (Import) in this
+   theme list.
+4. Choose the validated ZIP from `LIMESURVEY_THEME_DIR` without renaming it.
+5. Confirm that the theme appears as `installed_theme_name` and that `vanilla`
+   is recognized as the installed parent theme.
 6. Preview welcome, question, completion, token, error, print-answer, and
    public-statistics screens in the Theme Editor.
+
+Import only through the theme list. After a failed import LimeSurvey shows a
+replacement upload form that does not send the theme type; every upload there
+fails with "This theme type ('') is not allowed." (the empty type may also show
+as `""`), whatever the ZIP contains. Go back to the theme list instead.
+
+A failed import can leave the theme folder behind, and the next upload of the
+same file then stops because the theme already exists. Delete the leftover
+theme under **Available survey themes** or **Broken survey themes** (needs the
+global Templates delete permission) before trying again.
 
 If LimeSurvey Cloud does not show the import control, do not attempt unofficial
 filesystem installation. Confirm custom-theme availability for the account or
@@ -128,14 +192,19 @@ Tool: `limesurvey_assign_survey_theme`
 ```json
 {
   "survey_id": 123456,
-  "theme_name": "weit_feedback",
+  "theme_name": "weit_feedback-100-ls7",
   "confirm_theme_assignment": true
 }
 ```
 
-Read the survey's `template` property with
-`limesurvey_get_survey_properties`, then open the survey as a participant in
-every configured language. Assign it to a production survey only after review.
+`theme_name` is the installed name. LimeSurvey answers `{"template": true}` even
+when it keeps another theme: a theme that is not installed under this name, not
+readable for the RemoteControl account, or incompatible is silently replaced by
+the previous or the default theme. The tool therefore reads the `template`
+property back. A match returns `verified: true`; a different value fails with
+`THEME_NOT_APPLIED`, naming the requested and the stored theme. Then open the
+survey as a participant in every configured language. Assign it to a
+production survey only after review.
 
 ## Acceptance and rollback
 
@@ -149,6 +218,7 @@ At minimum, test:
 - reduced motion and print output;
 - privacy, token, quota, and completion pages.
 
-Record the previous theme name before deployment. Roll back by assigning the
-previous installed theme with `limesurvey_assign_survey_theme`; the new package
-does not need to be deleted.
+Record the previous theme name before deployment. LimeSurvey does not overwrite
+an installed theme with a new upload; a new version is a new package with its
+own installed name. Roll back by assigning the previous installed theme with
+`limesurvey_assign_survey_theme`; the new package does not need to be deleted.

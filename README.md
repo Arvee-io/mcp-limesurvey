@@ -630,14 +630,26 @@ Generated themes:
 - optionally include a signature-checked PNG or JPEG logo;
 - are licensed **GPL-2.0-or-later**, matching the inherited LimeSurvey theme.
 
+LimeSurvey installs an uploaded theme under the ZIP file name without `.zip` and
+without dots, not under `theme_name`: `weit_feedback-1.0.0-ls7.zip` becomes
+`weit_feedback-100-ls7` (at most 45 characters). The generator, the validator,
+and the publication guide return this as `installed_theme_name`, and
+`limesurvey_assign_survey_theme` takes it. The validator follows the LimeSurvey
+7.5.1 import: errors mean LimeSurvey would refuse, skip, or not use something,
+while warnings starting with `policy:` mark what LimeSurvey accepts but the
+generator never produces (for example JavaScript or another parent theme).
+
 Recommended tool sequence:
 
 1. `limesurvey_generate_survey_theme`
 2. `limesurvey_validate_survey_theme`; continue only with `valid=true`
 3. `limesurvey_get_theme_publication_guide` using the installed version shown in LimeSurvey
-4. Import the ZIP under **Configuration > Advanced > Themes > Survey themes**
+4. Import the unrenamed ZIP with **Upload & install** in the theme list under
+   **Configuration > Advanced > Themes > Survey themes**
 5. Test an inactive survey on phone, tablet, desktop, keyboard, zoom, RTL, and print
-6. `limesurvey_assign_survey_theme` with `confirm_theme_assignment=true`
+6. `limesurvey_assign_survey_theme` with `installed_theme_name` and
+   `confirm_theme_assignment=true`; it reads the template back and fails with
+   `THEME_NOT_APPLIED` when LimeSurvey kept another theme
 
 See [Survey Theme Guide](docs/SURVEY_THEMES.md) for complete examples,
 acceptance criteria, Cloud restrictions, community publication, and rollback.

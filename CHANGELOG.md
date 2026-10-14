@@ -72,6 +72,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - An empty question, subquestion or answer text is a warning instead of an error;
   `default` is rejected on question types where LimeSurvey never uses it.
 
+### Fixed
+
+- Survey themes on LimeSurvey 7, based on user feedback. LimeSurvey installs an
+  uploaded theme under the ZIP file name without `.zip` and without dots, so a
+  generated package `weit_feedback-1.0.0-ls7.zip` becomes
+  `weit_feedback-100-ls7`, which `limesurvey_assign_survey_theme` could not take;
+  assigning `weit_feedback` reported success while LimeSurvey kept the default
+  theme.
+  - `limesurvey_generate_survey_theme` returns `installed_theme_name`, writes it
+    as `metadata/name`, and refuses a `theme_name` whose installed name would
+    exceed LimeSurvey's 45 characters (`THEME_NAME_TOO_LONG`) before writing.
+  - `limesurvey_assign_survey_theme` takes installed names (1–45 ASCII letters,
+    digits, `_`, `-`), reads the template back after `set_survey_properties`,
+    and fails with `THEME_NOT_APPLIED` when LimeSurvey stored another theme; a
+    match returns `verified: true`.
+  - `limesurvey_validate_survey_theme` follows the LimeSurvey 7.5.1 import and
+    returns `installed_theme_name`. New errors: an installed name over 45
+    characters or with other characters, files the import would skip (such as
+    `.html` in `views/`), and a missing `metadata/title`. Now allowed: web fonts
+    (`woff2`, `woff`, `ttf`, `otf` with a signature check, `eot`), `txt`/`md`
+    anywhere, `gif`/`ico`, and subfolders in `css/` and `files/`. JavaScript,
+    source maps, JSON, files without an extension, a parent other than
+    `vanilla`, a `type` other than `theme`, and a missing 7.x compatibility entry
+    are `policy:` warnings instead of errors.
+  - `limesurvey_get_theme_publication_guide` returns `installed_theme_name` and
+    explains the import through the theme list: do not rename the ZIP, avoid the
+    replacement upload form behind "This theme type ('') is not allowed.",
+    delete a theme folder left behind by a failed import, and treat a new
+    version as a new theme.
+
 ## [1.5.1] - 2026-10-14
 
 ### Fixed

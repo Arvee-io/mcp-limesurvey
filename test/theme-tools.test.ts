@@ -60,7 +60,8 @@ test("generates and validates a responsive LimeSurvey 7 theme package", async ()
     const license = await zip.file("LICENSE.txt")?.async("string");
     assert.match(manifest ?? "", /<extends>vanilla<\/extends>/);
     assert.match(manifest ?? "", /<version>7\.0<\/version>/);
-    // apiVersion must be the integer template API version LimeSurvey expects, not "3.0".
+    // The generator writes the integer template API version 3. LimeSurvey 7.5.1 replaces apiVersion with the parent's
+    // value for an extending theme, so the value has no effect there; "3.0" would work as well.
     assert.match(manifest ?? "", /<apiVersion>3<\/apiVersion>/);
     assert.match(css ?? "", /@media \(max-width: 575\.98px\)/);
     assert.match(css ?? "", /prefers-reduced-motion/);
