@@ -34,7 +34,7 @@ import {
   type SpecDifference,
 } from "./spec-compare.js";
 import { generateQuestionLsq, specInvalidError } from "./spec-generate.js";
-import { asString, expandText, isRecord, type TextMap } from "./spec-model.js";
+import { asString, expandText, isRecord, TWO_ANSWER_SCALES, type TextMap } from "./spec-model.js";
 import { mapLimit, PARALLEL_READS, readSurveyOutline, readSurveySpec, type SpecRead, type SurveyOutline } from "./spec-read.js";
 import { DATA_URI_SOURCE, validateSpec, type SpecFinding, type SpecWarning } from "./spec-validate.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
@@ -163,6 +163,9 @@ interface Change {
   kind: ChangeKind;
   current: JsonValue;
   desired: JsonValue;
+  /** Below a subquestion or answer: its code, and its scale_id when it is on scale 1. */
+  code?: string;
+  scale_id?: number;
 }
 
 interface Risk {
@@ -507,7 +510,7 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
 function removals(current: ComparableQuestion, desired: ComparableQuestion): {
   paths: string[];
   subquestions: Array<{ code: string; scale: number }>;
-  answers: string[];
+  answers: Array<{ code: string; scale: number }>;
 } {
   const paths: string[] = [];
   const desiredSubs = new Map(desired.subquestions.map((item) => [itemKey(item), item] as const));
@@ -522,11 +525,11 @@ function removals(current: ComparableQuestion, desired: ComparableQuestion): {
     }
   });
   const desiredAnswers = new Set(desired.answers.map(itemKey));
-  const removedAnswers: string[] = [];
+  const removedAnswers: Array<{ code: string; scale: number }> = [];
   current.answers.forEach((item, index) => {
     if (!desiredAnswers.has(itemKey(item))) {
       paths.push(`answers[${index}]`);
-      removedAnswers.push(item.code);
+      removedAnswers.push({ code: item.code, scale: item.scale_id ?? 0 });
     }
   });
   for (const name of Object.keys(current.attributes)) if (!Object.hasOwn(desired.attributes, name)) paths.push(`attributes.${name}`);
@@ -688,8 +691,16 @@ async function questionRisks(input: RiskInput): Promise<{ risks: Risk[]; notes: 
     }
     if (replace) {
       // The new question gets a new ID. {sid}X{gid}X{qid} (and INSERTANS) names a question by its ID on both generations;
-      // Q{qid} only on LimeSurvey 7, and only when no question of the survey has that code.
-      const sgqa = new RegExp(`(?<![0-9])${input.surveyId}X${input.groupId}X${input.questionId}(?![0-9])`);
+      // Q{qid} only on LimeSurvey 7, and only when no question of the survey has that code. On LimeSurvey 6 a field name
+      // continues with the code of a subquestion: {sq}, {row}_{column}, {sq}#0/#1, {sq}comment (common_helper.php 6.17.11:
+      // 1532-1916, research-gen-types.md section 2). A code may start with a digit, so after the ID either no digit follows,
+      // or one of the codes of this question (both scales, longest first) and then comment, other or no letter or digit.
+      const ownCodes = [...new Set(current.subquestions.map((item) => item.code))]
+        .filter((code) => code !== "")
+        .sort((a, b) => b.length - a.length)
+        .map(escapeRegExp);
+      const fieldOfOwnCode = ownCodes.length > 0 ? `|(?:${ownCodes.join("|")})(?:comment|other)?(?![A-Za-z0-9])` : "";
+      const sgqa = new RegExp(`(?<![0-9])${input.surveyId}X${input.groupId}X${input.questionId}(?:(?![0-9])${fieldOfOwnCode})`);
       const qidName = `Q${input.questionId}`;
       const qidPattern = new RegExp(`(?<![A-Za-z0-9_])${qidName}(?![0-9])`);
       const qidHits = hits((expression) => qidPattern.test(expression));
@@ -715,13 +726,24 @@ async function questionRisks(input: RiskInput): Promise<{ risks: Risk[]; notes: 
       }
       if (removed.answers.length > 0) {
         const codePattern = tokenPattern(current.code);
-        const answerHits = hits((expression) => codePattern.test(expression) && removed.answers.some((code) => comparesWith(expression, code)));
+        // Type 1 has two answer scales; expressions name them as CODE_SQ_0 and CODE_SQ_1. An expression that names a field
+        // of the other scale only does not use the removed code; one that names no field of a scale may use either.
+        const twoScales = TWO_ANSWER_SCALES.has(current.type);
+        const scaleField = (scale: number | undefined): RegExp => new RegExp(
+          `(?<![A-Za-z0-9_])${escapeRegExp(current.code)}_[A-Za-z0-9]+_${scale === undefined ? "[01]" : String(scale)}(?![A-Za-z0-9])`,
+        );
+        const onScale = (expression: string, scale: number): boolean => (
+          !twoScales || scaleField(scale).test(expression) || !scaleField(undefined).test(expression)
+        );
+        const answerHits = hits((expression) => codePattern.test(expression)
+          && removed.answers.some((answer) => comparesWith(expression, answer.code) && onScale(expression, answer.scale)));
         if (answerHits.length > 0) {
+          const named = removed.answers.map((answer) => (twoScales ? `${answer.code} (scale ${answer.scale})` : answer.code));
           risks.push({
             code: "answer_code_references",
             blocking: true,
             acknowledgeable: true,
-            detail: `Expressions name the question together with answer codes the end state removes (${removed.answers.join(", ")}); `
+            detail: `Expressions name the question together with answer codes the end state removes (${named.join(", ")}); `
               + "they would never be true again.",
             locations: answerHits,
           });
@@ -1361,8 +1383,14 @@ export async function updateQuestionFromSpec(context: UpdateContext, input: Upda
   // 4. What changes, and how it can be written.
   const desired = normalQuestion(desiredSpec, languages, false);
   if (!desired) throw specInvalidError([{ path: "(spec)", message: "The question spec is empty.", fix: "Give the end state of the question." }], limit);
-  const changes: Change[] = questionDifferences(read.spec.survey, current, desired)
-    .map((item) => ({ path: item.path, kind: kindOf(item.path), current: item.expected, desired: item.actual }));
+  const changes: Change[] = questionDifferences(read.spec.survey, current, desired).map((item) => ({
+    path: item.path,
+    kind: kindOf(item.path),
+    current: item.expected,
+    desired: item.actual,
+    ...(item.code !== undefined ? { code: item.code } : {}),
+    ...(item.scale_id !== undefined ? { scale_id: item.scale_id } : {}),
+  }));
   const mode = modeOf(changes);
   const active = read.active;
   const rejected = active && (mode === "replace" || mode === "columns");

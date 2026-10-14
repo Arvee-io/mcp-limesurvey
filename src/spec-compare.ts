@@ -87,7 +87,11 @@ export interface ComparableSpec {
   groups: ComparableGroup[];
 }
 
-export type SpecDifference = { path: string; expected: JsonValue; actual: JsonValue };
+/**
+ * One difference. Below a subquestion or answer it also names the code of the entry and, when the entry is on scale 1,
+ * its scale_id, so that the entry is clear without its index (the same code may stand on both scales).
+ */
+export type SpecDifference = { path: string; expected: JsonValue; actual: JsonValue; code?: string; scale_id?: number };
 
 /** CRLF (and a lone CR, which an XML parser also turns into LF) to LF, trimmed when asked, then the safe entity decoding. */
 function clean(value: string, trim: boolean): string {
@@ -347,19 +351,25 @@ function diffItems<T extends { code: string; scale_id?: number }>(
   describe: (item: T) => unknown = (item) => item,
 ): void {
   const keyOf = (item: T): string => `${item.scale_id ?? 0}:${item.code}`;
+  const entryOf = (item: T): { code: string; scale_id?: number } => ({
+    code: item.code,
+    ...(item.scale_id !== undefined && item.scale_id !== 0 ? { scale_id: item.scale_id } : {}),
+  });
   const actualIndex = new Map(actual.map((item, index) => [keyOf(item), index] as const));
   const matched = new Set<number>();
   expected.forEach((item, index) => {
     const found = actualIndex.get(keyOf(item));
     if (found === undefined) {
-      out.push({ path: `${path}[${index}]`, expected: json(describe(item)), actual: null });
+      out.push({ path: `${path}[${index}]`, expected: json(describe(item)), actual: null, ...entryOf(item) });
       return;
     }
     matched.add(found);
-    diffValue(`${path}[${index}]`, item, actual[found], out);
+    const own: SpecDifference[] = [];
+    diffValue(`${path}[${index}]`, item, actual[found], own);
+    out.push(...own.map((difference) => ({ ...difference, ...entryOf(item) })));
   });
   actual.forEach((item, index) => {
-    if (!matched.has(index)) out.push({ path: `${path}[${index}]`, expected: null, actual: json(describe(item)) });
+    if (!matched.has(index)) out.push({ path: `${path}[${index}]`, expected: null, actual: json(describe(item)), ...entryOf(item) });
   });
   const commonExpected = expected.filter((item) => actualIndex.has(keyOf(item))).map(keyOf);
   const commonActual = actual.filter((_item, index) => matched.has(index)).map(keyOf);
