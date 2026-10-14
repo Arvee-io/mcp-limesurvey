@@ -92,6 +92,9 @@ export const TOOL_WRITE_SCOPES: Readonly<Record<string, WriteScope>> = {
   // or a language. create_survey_from_spec deletes nothing: a survey it created stays, and the result reports sid
   // and differences.
   limesurvey_create_survey_from_spec: "content",
+  // Add one question or group to an inactive survey; the rollback deletes only the question or group the call imported.
+  limesurvey_add_question_from_spec: "content",
+  limesurvey_add_group_from_spec: "content",
 
   // lifecycle
   limesurvey_activate_survey: "lifecycle",

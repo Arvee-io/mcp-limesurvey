@@ -4,11 +4,12 @@ import { z } from "zod";
 import type { LimeSurveyClient } from "./client.js";
 import { strictInput } from "./input-schema.js";
 import { capLists, structuredSize } from "./response-limit.js";
-import { scopedClient, type ClientLevel, type RpcClient, type ScopeOptions } from "./scoped-client.js";
+import { scopedClient, type ClientLevel, type CreatedIds, type RpcClient, type ScopeOptions } from "./scoped-client.js";
+import { addGroupFromSpec, addQuestionFromSpec } from "./spec-add.js";
 import { diffSpecs, fingerprint, normalizeSpec, type SpecDifference } from "./spec-compare.js";
 import { limeSurveyGeneration } from "./limesurvey-generation.js";
 import { generateSurveyLss, specInvalidError } from "./spec-generate.js";
-import { isRecord, normalizeSurveySpec, unescapeStrings } from "./spec-model.js";
+import { hasRankingQuestion, isRecord, normalizeSurveySpec, unescapeStrings } from "./spec-model.js";
 import { readSurveyContext, readSurveySpec, type ReadScope } from "./spec-read.js";
 import { validateSpec, type SpecFinding, type SpecWarning } from "./spec-validate.js";
 import { describeError, LimeSurveyError, type JsonValue, type LimeSurveyConfig } from "./types.js";
@@ -61,6 +62,24 @@ const specSchema = z.looseObject({
   modulename: z.unknown().optional().describe("Kind question: name of the module that provides the question."),
 }).describe("The survey description. Its fields depend on kind; unknown fields are reported by the check, not rejected.");
 
+const QUESTION_FIELDS = [
+  "code", "type", "text", "help", "script", "mandatory", "relevance", "other", "attributes", "subquestions", "answers",
+  "default", "default_other", "preg", "question_theme_name", "encrypted", "same_default", "same_script", "modulename",
+] as const;
+
+/** One question spec (kind question): the question fields of specSchema, loose for the same reason. */
+const questionSpecSchema = z.looseObject(Object.fromEntries(QUESTION_FIELDS.map((name) => [name, specSchema.shape[name]])))
+  .describe("The new question as a question spec, for example the spec of limesurvey_get_survey_spec at level question with a new code.");
+
+/** One group spec (kind group) with its questions. */
+const groupSpecSchema = z.looseObject({
+  title: specSchema.shape.title,
+  description: specSchema.shape.description,
+  relevance: specSchema.shape.relevance,
+  randomization_group: specSchema.shape.randomization_group,
+  questions: specSchema.shape.questions,
+}).describe("The new group as a group spec { title, description, relevance, randomization_group, questions }.");
+
 type ToolInput = Record<string, unknown>;
 
 /**
@@ -92,15 +111,6 @@ async function runScoped(
 const plainSpec = (spec: unknown): unknown => JSON.parse(JSON.stringify(spec ?? null));
 
 const findingList = (findings: Array<SpecFinding | SpecWarning>): JsonValue => findings as unknown as JsonValue;
-
-/** Whether a spec of this kind has a question of type R (Ranking). */
-function hasRankingQuestion(kind: "survey" | "group" | "question", spec: unknown): boolean {
-  const isRanking = (question: unknown): boolean => isRecord(question) && question.type === "R";
-  const inGroup = (group: unknown): boolean => isRecord(group) && Array.isArray(group.questions) && group.questions.some(isRanking);
-  if (kind === "question") return isRanking(spec);
-  if (kind === "group") return inGroup(spec);
-  return isRecord(spec) && Array.isArray(spec.groups) && spec.groups.some(inGroup);
-}
 
 const SKIPPED_WITHOUT_SURVEY = [
   "Question codes are not compared with the codes the target survey already uses (give survey_id).",
@@ -484,6 +494,94 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
       }
       return result;
     }),
+  );
+
+  server.registerTool(
+    "limesurvey_add_question_from_spec",
+    {
+      title: "Add a question from a description",
+      description: "Insert one new question into a group of an inactive survey, described as a question spec (the format "
+        + "limesurvey_get_survey_spec returns at level question; every text is one string for all survey languages or a map "
+        + "per language). position is the 1-based place in the group, { before: code } or { after: code }; without it the "
+        + "question goes to the end. The spec is checked against the survey first (its languages; the code must be free in "
+        + "the whole survey, case ignored): SPEC_INVALID, CODE_CONFLICT, SURVEY_ACTIVE, GROUP_SURVEY_MISMATCH and "
+        + "POSITION_INVALID write nothing. The question is imported (import_question) and only the new question is moved to "
+        + "its place; no other question is changed. It is then read back and compared with the spec. Returns { survey_id, "
+        + "group_id, question_id, code, position { index }, verification { ok, differences, differences_total, truncated }, "
+        + "side_effects, warnings }; a difference is a finding, not an error. side_effects names texts of other groups and "
+        + "questions without a row in an additional language: import_question fills them with the base-language text, and "
+        + "that is not undone. If a step after the import fails, the new question is deleted again (nothing else) and "
+        + "ADD_QUESTION_FAILED reports failed_step, rolled_back and manual_cleanup. An active survey is refused. A whole "
+        + "group goes with limesurvey_add_group_from_spec. A Ranking question makes the tool read the LimeSurvey generation "
+        + "once (entries as subquestions on 7, as answers on 6). The question types 1, : and ; are not supported yet. Needs "
+        + "the write scope content.",
+      inputSchema: strictInput({
+        survey_id: surveyId,
+        group_id: z.number().int().positive().describe("ID of the group of this survey that gets the question."),
+        question: questionSpecSchema,
+        position: z.union([
+          z.number().int().positive(),
+          z.strictObject({ before: z.string().min(1).describe("Code of the question the new one goes in front of.") }),
+          z.strictObject({ after: z.string().min(1).describe("Code of the question the new one goes behind.") }),
+        ]).optional().describe("1-based place in the group, { before: code } or { after: code }; default: the end of the group."),
+      }),
+      outputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => {
+      const created: CreatedIds = { questions: new Set(), groups: new Set() };
+      return runScoped(
+        config,
+        client,
+        "add_question_from_spec",
+        input,
+        (scoped) => addQuestionFromSpec({ rpc: scoped, client, config, created }, input),
+        { writeMethods: ["import_question", "set_question_properties"], created },
+      );
+    },
+  );
+
+  server.registerTool(
+    "limesurvey_add_group_from_spec",
+    {
+      title: "Add a group from a description",
+      description: "Insert one new group with its questions into an inactive survey, described as a group spec (the format "
+        + "limesurvey_get_survey_spec returns at level group; every text is one string for all survey languages or a map per "
+        + "language). position is the 1-based place among the groups, { before: group_id } or { after: group_id }; without "
+        + "it the group goes to the end. The spec is checked against the survey first (its languages; every question code "
+        + "must be free in the whole survey, case ignored, because the import would rename it silently): SPEC_INVALID, "
+        + "CODE_CONFLICT, SURVEY_ACTIVE and POSITION_INVALID write nothing. The group is imported (import_group) with exactly "
+        + "the survey languages and only the new group is moved to its place; no other group is changed. It is then read "
+        + "back and compared with the spec. Returns { survey_id, group_id, position { index }, questions [{ code, "
+        + "question_id }], verification { ok, differences, differences_total, truncated }, side_effects, warnings }; a "
+        + "difference is a finding, not an error. If a step after the import fails, the new group is deleted again (nothing "
+        + "else) and ADD_GROUP_FAILED reports failed_step, rolled_back and manual_cleanup. An active survey is refused. A "
+        + "single question goes with limesurvey_add_question_from_spec. A Ranking question makes the tool read the "
+        + "LimeSurvey generation once (entries as subquestions on 7, as answers on 6). The question types 1, : and ; are not "
+        + "supported yet. Needs the write scope content.",
+      inputSchema: strictInput({
+        survey_id: surveyId,
+        group: groupSpecSchema,
+        position: z.union([
+          z.number().int().positive(),
+          z.strictObject({ before: z.number().int().positive().describe("ID of the group the new one goes in front of.") }),
+          z.strictObject({ after: z.number().int().positive().describe("ID of the group the new one goes behind.") }),
+        ]).optional().describe("1-based place among the groups, { before: group_id } or { after: group_id }; default: the end."),
+      }),
+      outputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async (input) => {
+      const created: CreatedIds = { questions: new Set(), groups: new Set() };
+      return runScoped(
+        config,
+        client,
+        "add_group_from_spec",
+        input,
+        (scoped) => addGroupFromSpec({ rpc: scoped, client, config, created }, input),
+        { writeMethods: ["import_group", "set_group_properties"], created },
+      );
+    },
   );
 }
 
