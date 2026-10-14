@@ -44,8 +44,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `limesurvey_update_survey_texts` changes texts of the survey, groups, questions
   and subquestions per language, also on active surveys, and refuses what
   RemoteControl cannot write before anything is written.
-- Attributes that the theme of a question does not define are an error before
-  anything is written (`ATTRIBUTE_NAMES`, generated from LimeSurvey 6.17.11 and
+- Attributes that the theme of a question does not define, and a question theme
+  of another question type, are errors before anything is written
+  (`ATTRIBUTE_NAMES` and `THEME_TYPES`, generated from LimeSurvey 6.17.11 and
   7.5.1).
 - Texts per language: every text field of a spec takes a string or a map per
   language; new structure must cover exactly the survey languages.

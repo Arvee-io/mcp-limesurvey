@@ -567,8 +567,17 @@ Unchanged texts are written back as LimeSurvey stored them. On an active survey
 every change other than texts answers `SURVEY_ACTIVE` without writing; answer
 texts cannot be written on active surveys at all. References from other
 questions to the code (`code_references`), SGQA references, and embedded data URIs
-block a run that would break them and cannot be acknowledged. Attributes the new
-type or theme does not define are an error before anything is written.
+block a run that would break them and cannot be acknowledged; the check reads
+relevance, attributes, scripts, default values, and answer texts of every question
+(in free texts only expressions in `{...}`) and also finds removed comment,
+`other`, and array column variables. Texts the question has no row for in a
+language count as unchanged; a replacement reports them as `unreadable_texts`
+(acknowledged with `fill_translation_gaps`). Attributes the new type or theme does
+not define, and a `question_theme_name` of another question type, are errors
+before anything is written. Long lists of locations are capped (`locations_total`).
+If only the read-back after a successful write fails, the error is
+`VERIFY_READ_FAILED` with `written: true`: the change is stored, read the question
+again before retrying.
 
 ### Changing texts
 
