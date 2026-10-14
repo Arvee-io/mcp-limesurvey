@@ -1,10 +1,11 @@
 /**
  * Reads a live survey into the comparable spec form (texts as a map per language), with read methods only. Used to
- * verify what an import produced and to give validate_spec the facts of the target survey.
+ * verify what an import produced, to answer limesurvey_get_survey_spec and to give validate_spec the facts of the
+ * target survey.
  */
 import { BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "./attribute-defaults.js";
 import type { RpcClient } from "./scoped-client.js";
-import { normalizeSpec, type AttributeValue, type ComparableSpec, type TextMap } from "./spec-compare.js";
+import { normalizeSpec, type AttributeValue, type ComparableSpec, type DefaultValue, type TextMap } from "./spec-compare.js";
 import { isRecord } from "./spec-model.js";
 import { LimeSurveyError, type JsonValue } from "./types.js";
 
@@ -31,6 +32,9 @@ export const SPEC_QUESTION_PROPERTIES: readonly string[] = Object.freeze([
 
 const PARALLEL_READS = 4;
 
+/** Question types that never carry a default value: no field map is read when a survey has nothing else. */
+const NO_DEFAULT_TYPES: ReadonlySet<string> = new Set(["X", "*", "|", "R"]);
+
 export interface MissingTranslation {
   path: string;
   language: string;
@@ -43,15 +47,34 @@ export interface UnreadableItem {
   reason: string;
 }
 
+/** Where the groups and main questions of the survey are, by id, in the order of the survey. */
+export interface SpecLayout {
+  groups: Array<{
+    group_id: number;
+    questions: Array<{ question_id: number; code: string }>;
+  }>;
+}
+
+/** Restricts a reading to one group (all its questions) or one question; the layout always covers the whole survey. */
+export interface ReadScope {
+  groupId?: number;
+  questionId?: number;
+}
+
 export interface SpecRead {
   languages: string[];
   active: boolean;
-  /** Comparable form; a language a text lacks is missing from its map and listed in missing_translations. */
+  /**
+   * Comparable form; a language a text lacks is missing from its map and listed in missing_translations. With a scope
+   * only the selected group (or the group of the selected question, with that question alone) is in spec.groups;
+   * the paths of missing_translations and unreadable are those of the whole survey (groups[1].questions[0].text).
+   */
   spec: ComparableSpec;
   /** Texts that have no row in a language (the question text itself, not what hangs on it). */
   missing_translations: MissingTranslation[];
   /** Answer texts and language-dependent attributes that cannot be read because the question has no text row in the language. */
   unreadable: UnreadableItem[];
+  layout: SpecLayout;
 }
 
 const NO_TEXT_ROW_ANSWERS = "The question has no text row in this language, so get_question_properties fails for it and its answer options cannot be read.";
@@ -73,6 +96,8 @@ function num(value: JsonValue | undefined, fallback = 0): number {
   if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return Number(value.trim());
   return fallback;
 }
+
+const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 function splitLanguages(value: JsonValue | undefined): string[] {
   if (typeof value === "string") return value.split(/[\s,;]+/).filter(Boolean);
@@ -155,7 +180,7 @@ function parseOptions(value: JsonValue | undefined, multiscale: boolean): Option
       ? value.map((inner, index): [string, JsonValue] => [String(index), inner])
       : Object.entries(value)).flatMap(([scale, inner]) => optionsOf(inner, num(scale)))
     : optionsOf(value, 0);
-  return options.sort((a, b) => a.scale_id - b.scale_id || a.order - b.order || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  return options.sort((a, b) => a.scale_id - b.scale_id || a.order - b.order || compareText(a.code, b.code));
 }
 
 function attributeValue(value: JsonValue | undefined): string {
@@ -165,30 +190,83 @@ function attributeValue(value: JsonValue | undefined): string {
   return JSON.stringify(value);
 }
 
+/** The default values of one question in one language, as the field map reports them. */
+interface FieldDefaults {
+  /** The default of the question itself (aid empty). */
+  main?: string;
+  /** The default of the "Other" option (aid other). */
+  other?: string;
+  /** The default of a subquestion, by its code (the aid of its field). */
+  subs: Map<string, string>;
+}
+
+function parseFieldDefaults(fieldmap: JsonValue): Map<string, FieldDefaults> {
+  const result = new Map<string, FieldDefaults>();
+  const entries = Array.isArray(fieldmap) ? fieldmap : isRecord(fieldmap) ? Object.values(fieldmap as Row) : [];
+  for (const entry of entries) {
+    const row = asRow(entry);
+    if (!row) continue;
+    const value = str(row.defaultvalue);
+    const qid = str(row.qid);
+    if (value === "" || qid === "") continue;
+    const target = result.get(qid) ?? { subs: new Map<string, string>() };
+    result.set(qid, target);
+    const sqid = str(row.sqid);
+    const aid = str(row.aid);
+    if (sqid !== "" && sqid !== "0") target.subs.set(aid, value);
+    else if (aid === "other") target.other = value;
+    else if (aid === "") target.main = value;
+  }
+  return result;
+}
+
+/** The default values of a survey in one language: from get_fieldmap, because get_question_properties cannot give them. */
+async function readFieldDefaults(client: RpcClient, surveyId: number, language: string): Promise<Map<string, FieldDefaults>> {
+  let fieldmap: JsonValue;
+  try {
+    fieldmap = await client.call("get_fieldmap", [surveyId, language]);
+  } catch (error) {
+    // A survey without fields answers "Can not obtain field map": it has no default values either.
+    if (error instanceof LimeSurveyError && /field ?map/i.test(error.message)) return new Map();
+    throw error;
+  }
+  return parseFieldDefaults(fieldmap);
+}
+
+function mismatch(code: string, message: string, details: Record<string, JsonValue>): LimeSurveyError {
+  return new LimeSurveyError(message, code, {
+    ...details,
+    recovery: "Read the survey with survey_id alone: ids lists the group and question IDs of this survey.",
+  });
+}
+
 /** Reads the survey with get_* and list_* methods only. */
-export async function readSurveySpec(client: RpcClient, surveyId: number): Promise<SpecRead> {
+export async function readSurveySpec(client: RpcClient, surveyId: number, scope: ReadScope = {}): Promise<SpecRead> {
   const properties = asRow(await client.call("get_survey_properties", [surveyId, [...SPEC_SURVEY_PROPERTIES]])) ?? {};
   const base = str(properties.language) || "de";
   const languages = [base, ...splitLanguages(properties.additional_languages).filter((language) => language !== base)];
   const missing: MissingTranslation[] = [];
   const unreadable: UnreadableItem[] = [];
+  const scoped = scope.groupId !== undefined || scope.questionId !== undefined;
 
-  // Survey texts.
+  // Survey texts (not needed to read a group or a question).
   const surveyTexts = { title: {} as TextMap, description: {} as TextMap, welcometext: {} as TextMap, endtext: {} as TextMap };
-  const languageRows = await mapLimit(languages, PARALLEL_READS, async (language) => (
-    asRow(await client.call("get_language_properties", [surveyId, [...SPEC_LANGUAGE_PROPERTIES], language]))
-  ));
-  languages.forEach((language, index) => {
-    const row = languageRows[index];
-    if (!row || row.surveyls_title === null || row.surveyls_title === undefined) {
-      missing.push({ path: "survey.title", language });
-      return;
-    }
-    surveyTexts.title[language] = str(row.surveyls_title);
-    surveyTexts.description[language] = str(row.surveyls_description);
-    surveyTexts.welcometext[language] = str(row.surveyls_welcometext);
-    surveyTexts.endtext[language] = str(row.surveyls_endtext);
-  });
+  if (!scoped) {
+    const languageRows = await mapLimit(languages, PARALLEL_READS, async (language) => (
+      asRow(await client.call("get_language_properties", [surveyId, [...SPEC_LANGUAGE_PROPERTIES], language]))
+    ));
+    languages.forEach((language, index) => {
+      const row = languageRows[index];
+      if (!row || row.surveyls_title === null || row.surveyls_title === undefined) {
+        missing.push({ path: "survey.title", language });
+        return;
+      }
+      surveyTexts.title[language] = str(row.surveyls_title);
+      surveyTexts.description[language] = str(row.surveyls_description);
+      surveyTexts.welcometext[language] = str(row.surveyls_welcometext);
+      surveyTexts.endtext[language] = str(row.surveyls_endtext);
+    });
+  }
 
   // Groups and questions of every language.
   const groupLists = await mapLimit(languages, PARALLEL_READS, async (language) => rowsOf(await client.call("list_groups", [surveyId, language])));
@@ -196,21 +274,70 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
     rowsOf(await client.call("list_questions", [surveyId, null, language]))
   ));
   const baseGroups = [...(groupLists[0] ?? [])].sort((a, b) => (
-    num(a.group_order) - num(b.group_order) || (str(a.group_name) < str(b.group_name) ? -1 : str(a.group_name) > str(b.group_name) ? 1 : 0)
-    || num(a.gid) - num(b.gid)
+    num(a.group_order) - num(b.group_order) || compareText(str(a.group_name), str(b.group_name)) || num(a.gid) - num(b.gid)
   ));
   const groupByLanguage = languages.map((_language, index) => new Map((groupLists[index] ?? []).map((row) => [str(row.gid), row] as const)));
   const questionByLanguage = languages.map((_language, index) => new Map((questionLists[index] ?? []).map((row) => [str(row.qid), row] as const)));
   const baseQuestions = questionLists[0] ?? [];
-
-  // Properties of every main question in every language.
   const mainRows = baseQuestions.filter(isMainQuestion);
-  const tasks = mainRows.flatMap((row) => languages.map((language) => ({ qid: str(row.qid), language })));
+  const orderedQuestions = (gid: string): Row[] => mainRows
+    .filter((row) => str(row.gid) === gid)
+    .sort((a, b) => num(a.question_order) - num(b.question_order) || compareText(str(a.title), str(b.title)));
+
+  const layout: SpecLayout = {
+    groups: baseGroups.map((groupRow) => ({
+      group_id: num(groupRow.gid),
+      questions: orderedQuestions(str(groupRow.gid)).map((row) => ({ question_id: num(row.qid), code: str(row.title) })),
+    })),
+  };
+
+  // The scope: which group and which question are read. An id of another survey stops here, before any property is read.
+  let wantedGroup: string | undefined;
+  let wantedQuestion: string | undefined;
+  if (scope.questionId !== undefined) {
+    const found = mainRows.find((row) => num(row.qid) === scope.questionId);
+    if (!found) {
+      const isSub = baseQuestions.some((row) => num(row.qid) === scope.questionId);
+      throw mismatch(
+        "QUESTION_SURVEY_MISMATCH",
+        isSub
+          ? `Question ${scope.questionId} is a subquestion of survey ${surveyId}; give the ID of its main question.`
+          : `Question ${scope.questionId} does not belong to survey ${surveyId}.`,
+        { survey_id: surveyId, question_id: scope.questionId },
+      );
+    }
+    wantedQuestion = str(found.qid);
+    wantedGroup = str(found.gid);
+  } else if (scope.groupId !== undefined) {
+    const found = baseGroups.find((row) => num(row.gid) === scope.groupId);
+    if (!found) {
+      throw mismatch(
+        "GROUP_SURVEY_MISMATCH",
+        `Group ${scope.groupId} does not belong to survey ${surveyId}.`,
+        { survey_id: surveyId, group_id: scope.groupId },
+      );
+    }
+    wantedGroup = str(found.gid);
+  }
+  const selectedMain = (row: Row): boolean => (
+    (wantedGroup === undefined || str(row.gid) === wantedGroup) && (wantedQuestion === undefined || str(row.qid) === wantedQuestion)
+  );
+
+  // Properties of every selected main question in every language.
+  const selectedRows = mainRows.filter(selectedMain);
+  const tasks = selectedRows.flatMap((row) => languages.map((language) => ({ qid: str(row.qid), language })));
   const taskResults = await mapLimit(tasks, PARALLEL_READS, (task) => readQuestionProperties(client, task.qid, task.language));
   const propertiesOf = new Map<string, Row | undefined>(tasks.map((task, index) => [`${task.qid}|${task.language}`, taskResults[index]]));
 
-  const groups = baseGroups.map((groupRow, groupIndex) => {
+  // Default values per language.
+  const needsDefaults = selectedRows.some((row) => !NO_DEFAULT_TYPES.has(str(row.type)));
+  const defaultsByLanguage = needsDefaults
+    ? await mapLimit(languages, PARALLEL_READS, (language) => readFieldDefaults(client, surveyId, language))
+    : languages.map(() => new Map<string, FieldDefaults>());
+
+  const groups = baseGroups.flatMap((groupRow, groupIndex) => {
     const gid = str(groupRow.gid);
+    if (wantedGroup !== undefined && gid !== wantedGroup) return [];
     const title: TextMap = {};
     const description: TextMap = {};
     languages.forEach((language, languageIndex) => {
@@ -223,10 +350,8 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
       description[language] = str(row.description);
     });
 
-    const questionRows = mainRows
-      .filter((row) => str(row.gid) === gid)
-      .sort((a, b) => num(a.question_order) - num(b.question_order) || (str(a.title) < str(b.title) ? -1 : str(a.title) > str(b.title) ? 1 : 0));
-    const questions = questionRows.map((row, questionIndex) => {
+    const questions = orderedQuestions(gid).flatMap((row, questionIndex) => {
+      if (!selectedMain(row)) return [];
       const qid = str(row.qid);
       const questionPath = `groups[${groupIndex}].questions[${questionIndex}]`;
       const propsIn = (language: string): Row | undefined => propertiesOf.get(`${qid}|${language}`);
@@ -238,6 +363,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
 
       const text: TextMap = {};
       const help: TextMap = {};
+      const script: TextMap = {};
       languages.forEach((language, languageIndex) => {
         const props = propertiesOf.get(`${qid}|${language}`);
         const fallback = questionByLanguage[languageIndex]?.get(qid);
@@ -248,6 +374,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
         }
         text[language] = str(question);
         help[language] = str(props.help ?? fallback?.help);
+        script[language] = str(props.script);
       });
 
       const attributes: Record<string, AttributeValue> = {};
@@ -273,29 +400,52 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
 
       const subRows = baseQuestions
         .filter((sub) => !isMainQuestion(sub) && str(sub.parent_qid) === qid)
-        .sort((a, b) => num(a.scale_id) - num(b.scale_id) || num(a.question_order) - num(b.question_order) || (str(a.title) < str(b.title) ? -1 : str(a.title) > str(b.title) ? 1 : 0));
+        .sort((a, b) => num(a.scale_id) - num(b.scale_id) || num(a.question_order) - num(b.question_order) || compareText(str(a.title), str(b.title)));
       const subTexts = (sub: Row, path: string): TextMap => {
         const result: TextMap = {};
         languages.forEach((language, languageIndex) => {
-          const row = questionByLanguage[languageIndex]?.get(str(sub.qid));
-          if (!row || row.question === null || row.question === undefined) {
+          const subRow = questionByLanguage[languageIndex]?.get(str(sub.qid));
+          if (!subRow || subRow.question === null || subRow.question === undefined) {
             missing.push({ path, language });
             return;
           }
-          result[language] = str(row.question);
+          result[language] = str(subRow.question);
         });
         return result;
+      };
+      const relevanceOf = (item: Row): { relevance?: string } => {
+        const relevance = str(item.relevance).trim() || "1";
+        return relevance === "1" ? {} : { relevance };
+      };
+
+      // Default values: one string with same_default, otherwise a text per language that has one.
+      const sameDefault = str(column("same_default")) === "1";
+      const defaultsOf = (pick: (entry: FieldDefaults) => string | undefined): DefaultValue | undefined => {
+        const perLanguage: TextMap = {};
+        languages.forEach((language, languageIndex) => {
+          const entry = defaultsByLanguage[languageIndex]?.get(qid);
+          const found = entry === undefined ? undefined : pick(entry);
+          if (found !== undefined) perLanguage[language] = found;
+        });
+        const entries = Object.entries(perLanguage);
+        if (entries.length === 0) return undefined;
+        return sameDefault ? (perLanguage[base] ?? entries[0]?.[1]) : perLanguage;
       };
 
       // LimeSurvey 7 stores the entries of a Ranking question as subquestions; the spec calls them answers.
       const rankingAsAnswers = type === "R" && subRows.length > 0;
       const subquestions = rankingAsAnswers
         ? []
-        : subRows.map((sub, index) => ({
-          code: str(sub.title),
-          text: subTexts(sub, `${questionPath}.subquestions[${index}].text`),
-          ...(num(sub.scale_id) === 0 ? {} : { scale_id: num(sub.scale_id) }),
-        }));
+        : subRows.map((sub, index) => {
+          const subDefault = defaultsOf((entry) => entry.subs.get(str(sub.title)));
+          return {
+            code: str(sub.title),
+            text: subTexts(sub, `${questionPath}.subquestions[${index}].text`),
+            ...(num(sub.scale_id) === 0 ? {} : { scale_id: num(sub.scale_id) }),
+            ...relevanceOf(sub),
+            ...(subDefault !== undefined ? { default: subDefault } : {}),
+          };
+        });
 
       let answers: Array<Record<string, unknown>>;
       if (rankingAsAnswers) {
@@ -303,6 +453,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
           code: str(sub.title),
           text: subTexts(sub, `${questionPath}.answers[${index}].text`),
           assessment_value: 0,
+          ...relevanceOf(sub),
         }));
       } else {
         const multiscale = type === "1";
@@ -333,7 +484,12 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
       }
 
       const mandatory = str(column("mandatory"));
-      return {
+      const hasSubquestions = subRows.length > 0;
+      const questionDefault = hasSubquestions ? undefined : defaultsOf((entry) => entry.main);
+      const otherDefault = !hasSubquestions && (type === "L" || type === "!") && str(column("other")) === "Y"
+        ? defaultsOf((entry) => entry.other)
+        : undefined;
+      return [{
         code: str(column("title")),
         type,
         text,
@@ -345,9 +501,23 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
         attributes,
         subquestions,
         answers,
-      };
+        preg: str(column("preg")),
+        encrypted: str(column("encrypted")) === "Y",
+        same_default: sameDefault,
+        same_script: str(column("same_script")) === "1",
+        modulename: str(column("modulename")),
+        script,
+        ...(questionDefault !== undefined ? { default: questionDefault } : {}),
+        ...(otherDefault !== undefined ? { default_other: otherDefault } : {}),
+      }];
     });
-    return { title, description, relevance: str(groupRow.grelevance) || "1", questions };
+    return [{
+      title,
+      description,
+      relevance: str(groupRow.grelevance) || "1",
+      randomization_group: str(groupRow.randomization_group),
+      questions,
+    }];
   });
 
   const adminemail = str(properties.adminemail);
@@ -374,6 +544,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
     spec: normalizeSpec({ survey, groups }, languages),
     missing_translations: missing,
     unreadable,
+    layout,
   };
 }
 

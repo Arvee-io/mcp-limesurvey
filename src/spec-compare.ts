@@ -6,23 +6,30 @@
 import { createHash } from "node:crypto";
 import { ATTRIBUTE_DEFAULTS, BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "./attribute-defaults.js";
 import { unescapeHtmlSafe } from "./html-unescape.js";
-import { asString, isRecord, normalizeExpires, SURVEY_DEFAULTS, truthy } from "./spec-model.js";
+import { asString, isRecord, normalizeExpires, SURVEY_DEFAULTS, truthy, type TextMap } from "./spec-model.js";
 import type { JsonValue } from "./types.js";
 
-export type TextMap = Record<string, string>;
+export type { TextMap };
 export type AttributeValue = string | TextMap;
+/** A default value: a text per language, or (with same_default) one string for all languages. */
+export type DefaultValue = string | TextMap;
 
 export interface ComparableAnswer {
   code: string;
   text: TextMap;
   assessment_value: number;
   scale_id?: number;
+  /** Only when it is not 1 (a Ranking entry with a condition). */
+  relevance?: string;
 }
 
 export interface ComparableSubquestion {
   code: string;
   text: TextMap;
   scale_id?: number;
+  /** Only when it is not 1. */
+  relevance?: string;
+  default?: DefaultValue;
 }
 
 export interface ComparableQuestion {
@@ -37,12 +44,22 @@ export interface ComparableQuestion {
   subquestions: ComparableSubquestion[];
   answers: ComparableAnswer[];
   question_theme_name?: string;
+  /** The optional fields below are there only when they carry a value. */
+  preg?: string;
+  encrypted?: true;
+  same_default?: true;
+  same_script?: true;
+  modulename?: string;
+  script?: TextMap;
+  default?: DefaultValue;
+  default_other?: DefaultValue;
 }
 
 export interface ComparableGroup {
   title: TextMap;
   description: TextMap;
   relevance: string;
+  randomization_group?: string;
   questions: ComparableQuestion[];
 }
 
@@ -110,6 +127,14 @@ function baseTheme(type: string): string {
   return Object.hasOwn(BASE_THEME_BY_TYPE, type) ? (BASE_THEME_BY_TYPE[type] ?? "") : "";
 }
 
+/** Text that is kept exactly as written (a script is code: no trimming, no line ending change, no decoding). */
+const rawText = (value: unknown): string => asString(value);
+
+/**
+ * Attribute values that equal the default of the question theme are left out. A language-dependent attribute is
+ * left out when every language holds the default, and otherwise kept with every language, so that the map names the
+ * languages of the survey (as the validator demands).
+ */
 function normalizeAttributes(
   attributes: unknown,
   theme: string,
@@ -123,14 +148,23 @@ function normalizeAttributes(
     const value = attributes[name];
     if (I18N_ATTRIBUTES.has(name)) {
       const perLanguage = textMap(value, languages, attributeText);
-      const kept = Object.fromEntries(Object.entries(perLanguage).filter(([, item]) => item !== defaultOf(name)));
-      if (Object.keys(kept).length > 0) result[name] = kept;
+      if (!Object.values(perLanguage).every((item) => item === defaultOf(name))) result[name] = perLanguage;
     } else {
       const text = attributeText(value);
       if (text !== defaultOf(name)) result[name] = text;
     }
   }
   return result;
+}
+
+/** A default value: empty values dropped; with same_default one string (the value of the base language). */
+function normalizeDefault(value: unknown, languages: readonly string[], sameDefault: boolean): DefaultValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  const entries = Object.entries(textMap(value, languages)).filter(([, text]) => text !== "");
+  if (entries.length === 0) return undefined;
+  if (!sameDefault) return Object.fromEntries(entries);
+  const base = languages[0];
+  return (entries.find(([language]) => language === base) ?? entries[0])?.[1];
 }
 
 function normalizeQuestionForCompare(question: Record<string, unknown>, languages: readonly string[]): ComparableQuestion {
@@ -141,6 +175,16 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
     const scaleId = integer(item.scale_id);
     return scaleId === 0 ? {} : { scale_id: scaleId };
   };
+  const relevanceOf = (item: Record<string, unknown>): { relevance?: string } => {
+    const relevance = cleanText(item.relevance) || "1";
+    return relevance === "1" ? {} : { relevance };
+  };
+  const sameDefault = truthy(question.same_default);
+  const defaultValue = normalizeDefault(question.default, languages, sameDefault);
+  const defaultOther = normalizeDefault(question.default_other, languages, sameDefault);
+  const script = textMap(question.script, languages, rawText);
+  const preg = rawText(question.preg);
+  const modulename = rawText(question.modulename);
   return {
     code: cleanText(question.code),
     type,
@@ -150,18 +194,32 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
     relevance: cleanText(question.relevance) || "1",
     other: truthy(question.other),
     attributes: normalizeAttributes(question.attributes, explicitTheme || base, languages),
-    subquestions: records(question.subquestions).map((item) => ({
-      code: cleanText(item.code),
-      text: textMap(item.text, languages),
-      ...scale(item),
-    })),
+    subquestions: records(question.subquestions).map((item) => {
+      const subDefault = normalizeDefault(item.default, languages, sameDefault);
+      return {
+        code: cleanText(item.code),
+        text: textMap(item.text, languages),
+        ...scale(item),
+        ...relevanceOf(item),
+        ...(subDefault !== undefined ? { default: subDefault } : {}),
+      };
+    }),
     answers: records(question.answers).map((item) => ({
       code: cleanText(item.code),
       text: textMap(item.text, languages),
       assessment_value: integer(item.assessment_value),
       ...scale(item),
+      ...relevanceOf(item),
     })),
     ...(explicitTheme !== "" && explicitTheme !== base ? { question_theme_name: explicitTheme } : {}),
+    ...(preg !== "" ? { preg } : {}),
+    ...(truthy(question.encrypted) ? { encrypted: true as const } : {}),
+    ...(sameDefault ? { same_default: true as const } : {}),
+    ...(truthy(question.same_script) ? { same_script: true as const } : {}),
+    ...(modulename !== "" ? { modulename } : {}),
+    ...(Object.values(script).some((text) => text !== "") ? { script } : {}),
+    ...(defaultValue !== undefined ? { default: defaultValue } : {}),
+    ...(defaultOther !== undefined ? { default_other: defaultOther } : {}),
   };
 }
 
@@ -191,12 +249,16 @@ export function normalizeSpec(spec: unknown, languages: readonly string[]): Comp
       showqnumcode: cleanText(survey.showqnumcode ?? SURVEY_DEFAULTS.showqnumcode) || SURVEY_DEFAULTS.showqnumcode,
       expires: normalizeExpires(cleanText(survey.expires)),
     },
-    groups: records(root.groups).map((group) => ({
-      title: textMap(group.title, languages),
-      description: textMap(group.description, languages),
-      relevance: cleanText(group.relevance) || "1",
-      questions: records(group.questions).map((question) => normalizeQuestionForCompare(question, languages)),
-    })),
+    groups: records(root.groups).map((group) => {
+      const randomization = rawText(group.randomization_group);
+      return {
+        title: textMap(group.title, languages),
+        description: textMap(group.description, languages),
+        relevance: cleanText(group.relevance) || "1",
+        ...(randomization !== "" ? { randomization_group: randomization } : {}),
+        questions: records(group.questions).map((question) => normalizeQuestionForCompare(question, languages)),
+      };
+    }),
   };
 }
 
@@ -294,6 +356,7 @@ export function diffSpecs(expected: ComparableSpec, actual: ComparableSpec): Spe
     diffValue(`${path}.title`, expectedGroup.title, actualGroup.title, out);
     diffValue(`${path}.description`, expectedGroup.description, actualGroup.description, out);
     diffValue(`${path}.relevance`, expectedGroup.relevance, actualGroup.relevance, out);
+    diffValue(`${path}.randomization_group`, expectedGroup.randomization_group, actualGroup.randomization_group, out);
     const questionPath = `${path}.questions`;
     const actualIndex = new Map(actualGroup.questions.map((question, position) => [question.code, position] as const));
     const matched = new Set<number>();
