@@ -4,6 +4,7 @@
  * LimeSurvey; checks that need the live survey get their data through the optional context.
  */
 import {
+  ANSWER_CODE_MAX_LENGTH,
   ANSWER_CODE_PATTERN,
   ANSWER_KEYS,
   ATTRIBUTE_NAME_PATTERN,
@@ -14,6 +15,7 @@ import {
   NEED_ANSWERS,
   NEED_BOTH,
   NEED_SUBQUESTIONS,
+  NO_DEFAULT_TYPES,
   OTHER_ALLOWED,
   QUESTION_CODE_PATTERN,
   QUESTION_KEYS,
@@ -30,6 +32,7 @@ import {
   THEME_NAME_PATTERN,
   TWO_SCALE_TYPES,
   checkExpires,
+  isKnownLanguageIndependent,
   isRecord,
   surveyLanguages,
   unescapeStrings,
@@ -49,6 +52,12 @@ export interface SpecContext {
    * is held to; for kind survey the languages come from survey.language and survey.additional_languages.
    */
   languages?: readonly string[];
+  /**
+   * The LimeSurvey generation of the target instance (6 or 7), when the caller knows it. It decides what an entry of a
+   * Ranking question may have: on 7 a code of up to 20 characters and a relevance, on 6 neither. Without it both are
+   * allowed and reported as a warning.
+   */
+  rankingGeneration?: 6 | 7;
 }
 
 export type SpecSummary = { groups?: number; questions?: number; subquestions?: number; answers?: number; type?: string };
@@ -123,6 +132,8 @@ interface Scope {
   existingCodes: Set<string>;
   /** The languages a language map is held to (base language first); undefined when they are not known. */
   languages: readonly string[] | undefined;
+  /** The LimeSurvey generation of the target instance when it is known; it decides what a Ranking entry may have. */
+  generation: 6 | 7 | undefined;
   counters: { groups: number; questions: number; subquestions: number; answers: number };
 }
 
@@ -142,10 +153,20 @@ const quoted = (items: readonly string[]): string => items.map((item) => JSON.st
 
 interface MapOptions {
   required: boolean;
+  /** An empty entry of a required map is a warning, not an error (a question, subquestion or answer text). */
+  warnEmpty?: boolean;
   /** A default value may name only some of the languages of the survey. */
   subset: boolean;
   /** An attribute value may also be a number. */
   numbers: boolean;
+}
+
+const EMPTY_TEXT_WARNING = "This text is empty; LimeSurvey stores it, but nothing is shown for it.";
+
+/** An empty text: an error, or (a question, subquestion or answer text) a warning. */
+function emptyText(findings: Findings, path: string, warnEmpty: boolean | undefined): void {
+  if (warnEmpty === true) findings.warning(path, EMPTY_TEXT_WARNING);
+  else findings.error(path, "This text must not be empty.", "Give a non-empty string.");
 }
 
 /**
@@ -162,7 +183,7 @@ function checkLanguageMap(findings: Findings, path: string, map: Record<string, 
     const entry = map[key];
     const entryPath = keyPath(path, key);
     if (typeof entry === "string") {
-      if (options.required && entry.trim() === "") findings.error(entryPath, "This text must not be empty.", "Give a non-empty string.");
+      if (options.required && entry.trim() === "") emptyText(findings, entryPath, options.warnEmpty);
     } else if (!(options.numbers && typeof entry === "number" && Number.isFinite(entry))) {
       findings.error(entryPath, `The entry must be a string${options.numbers ? " or a number" : ""}, got ${describeValue(entry)}.`, TEXT_FIX);
     }
@@ -197,17 +218,28 @@ function checkLanguageMap(findings: Findings, path: string, map: Record<string, 
 }
 
 /** A text field: one string for every language, or a map per language. */
-function checkText(findings: Findings, path: string, value: unknown, scope: Scope, options: { required: boolean; subset?: boolean }): void {
+function checkText(
+  findings: Findings,
+  path: string,
+  value: unknown,
+  scope: Scope,
+  options: { required: boolean; subset?: boolean; warnEmpty?: boolean },
+): void {
   if (value === undefined) {
-    if (options.required) findings.error(path, "This text is required.", `Add "${path.split(".").pop() ?? path}" with a non-empty string.`);
+    if (options.required) findings.error(path, "This text is required.", `Add "${path.split(".").pop() ?? path}" with a string (it may be empty).`);
     return;
   }
   if (isRecord(value)) {
-    checkLanguageMap(findings, path, value, scope, { required: options.required, subset: options.subset === true, numbers: false });
+    checkLanguageMap(findings, path, value, scope, {
+      required: options.required,
+      ...(options.warnEmpty !== undefined ? { warnEmpty: options.warnEmpty } : {}),
+      subset: options.subset === true,
+      numbers: false,
+    });
   } else if (typeof value !== "string") {
     findings.error(path, `A text must be a string or a language map, got ${describeValue(value)}.`, TEXT_FIX);
   } else if (options.required && value.trim() === "") {
-    findings.error(path, "This text must not be empty.", "Give a non-empty string.");
+    emptyText(findings, path, options.warnEmpty);
   }
 }
 
@@ -359,19 +391,31 @@ function validateAnswers(findings: Findings, path: string, answers: unknown[], q
       return;
     }
     checkKeys(findings, answerPath, answer, ANSWER_KEYS, "an answer");
+    // LimeSurvey 7 stores the entries of a Ranking question as subquestions: a code of up to 20 characters and a
+    // relevance. LimeSurvey 6 keeps answers (up to 5 characters, no relevance). Without the version both are allowed
+    // and reported as a warning.
+    const isRanking = question.type === "R";
+    const longCodes = isRanking && scope.generation !== 6;
     const code = answer.code;
-    if (typeof code !== "string" || !ANSWER_CODE_PATTERN.test(code)) {
+    const codePath = keyPath(answerPath, "code");
+    if (typeof code !== "string" || !(longCodes ? SUBQUESTION_CODE_PATTERN : ANSWER_CODE_PATTERN).test(code)) {
       findings.error(
-        keyPath(answerPath, "code"),
-        `The answer code ${JSON.stringify(code)} is invalid (1-5 letters or digits).`,
-        "Use 1-5 letters or digits, for example A1 or 3.",
+        codePath,
+        `The answer code ${JSON.stringify(code)} is invalid (${longCodes ? "1-20 letters or digits" : "1-5 letters or digits"}).`,
+        `Use ${longCodes ? "1-20" : "1-5"} letters or digits, for example A1 or 3.`,
       );
     } else if (seen.has(code.toLowerCase())) {
-      findings.error(keyPath(answerPath, "code"), `The answer code ${code} is used twice in this question.`, "Give every answer a different code (case is ignored).");
+      findings.error(codePath, `The answer code ${code} is used twice in this question.`, "Give every answer a different code (case is ignored).");
     } else {
       seen.add(code.toLowerCase());
+      if (longCodes && scope.generation === undefined && code.length > ANSWER_CODE_MAX_LENGTH) {
+        findings.warning(
+          codePath,
+          `The code ${code} has more than ${ANSWER_CODE_MAX_LENGTH} characters: the code of an entry of a Ranking question may be that long only on LimeSurvey 7 (this check does not know the version).`,
+        );
+      }
     }
-    checkText(findings, keyPath(answerPath, "text"), answer.text, scope, { required: true });
+    checkText(findings, keyPath(answerPath, "text"), answer.text, scope, { required: true, warnEmpty: true });
     const value = answer.assessment_value;
     if (value !== undefined && !(typeof value === "number" && Number.isInteger(value))) {
       findings.error(keyPath(answerPath, "assessment_value"), "assessment_value must be a whole number.", "Use an integer such as 0 or 3.");
@@ -382,14 +426,19 @@ function validateAnswers(findings: Findings, path: string, answers: unknown[], q
       if (typeof relevance !== "string") {
         checkPlainString(findings, relevancePath, relevance);
       } else if (relevance.trim() !== "" && relevance.trim() !== "1") {
-        if (question.type === "R") {
+        if (!isRanking) {
+          findings.error(relevancePath, "Only the entries of a Ranking question (type R) take a relevance.", "Remove relevance from this answer.");
+        } else if (scope.generation === 6) {
           findings.error(
             relevancePath,
-            "A relevance on an entry of a Ranking question is not supported yet.",
-            "Remove relevance (or set it to 1); conditions on the entries of a Ranking question come with a later version.",
+            "A relevance on an entry of a Ranking question exists only on LimeSurvey 7; this instance runs LimeSurvey 6.",
+            "Remove relevance (or set it to 1), or create the survey on a LimeSurvey 7 instance.",
           );
-        } else {
-          findings.error(relevancePath, "Only the entries of a Ranking question (type R) take a relevance.", "Remove relevance from this answer.");
+        } else if (scope.generation === undefined) {
+          findings.warning(
+            relevancePath,
+            "A relevance on an entry of a Ranking question works only on LimeSurvey 7 (this check does not know the version).",
+          );
         }
       }
     }
@@ -440,7 +489,7 @@ function validateSubquestions(findings: Findings, path: string, subquestions: un
     } else {
       seen.add(code.toLowerCase());
     }
-    checkText(findings, keyPath(itemPath, "text"), item.text, scope, { required: true });
+    checkText(findings, keyPath(itemPath, "text"), item.text, scope, { required: true, warnEmpty: true });
     checkPlainString(findings, keyPath(itemPath, "relevance"), item.relevance);
     checkDefault(findings, keyPath(itemPath, "default"), item.default, scope, question.same_default === true);
   });
@@ -462,7 +511,9 @@ function validateAttributes(findings: Findings, path: string, attributes: unknow
       );
     }
     if (isRecord(value)) {
-      if (I18N_ATTRIBUTES.has(name)) {
+      // The attributes stored per language, and the ones no question theme table lists (a plugin attribute may be stored
+      // per language), take a map; an attribute known to be language independent does not.
+      if (I18N_ATTRIBUTES.has(name) || !isKnownLanguageIndependent(name)) {
         checkLanguageMap(findings, attributePath, value, scope, { required: false, subset: false, numbers: true });
       } else {
         findings.error(
@@ -507,7 +558,7 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
     scope.seenCodes.set(code.toLowerCase(), path === "" ? "the question" : path);
   }
 
-  checkText(findings, keyPath(path, "text"), question.text, scope, { required: true });
+  checkText(findings, keyPath(path, "text"), question.text, scope, { required: true, warnEmpty: true });
   checkText(findings, keyPath(path, "help"), question.help, scope, { required: false });
   checkText(findings, keyPath(path, "script"), question.script, scope, { required: false });
   checkPlainString(findings, keyPath(path, "relevance"), question.relevance);
@@ -589,6 +640,19 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
       "Set other to true on a type L or ! question, or remove default_other.",
     );
   }
+  // A default value counts only where LimeSurvey evaluates it: on a question without subquestions, and not on R and |.
+  if (question.default !== undefined) {
+    const defaultPath = keyPath(path, "default");
+    if (NEED_SUBQUESTIONS.has(type) || NEED_BOTH.has(type)) {
+      findings.error(
+        defaultPath,
+        `A type ${type} question keeps its default values per subquestion, so LimeSurvey ignores a default on the question itself.`,
+        "Put the default on the subquestions: subquestions[].default.",
+      );
+    } else if (NO_DEFAULT_TYPES.has(type)) {
+      findings.error(defaultPath, `LimeSurvey has no default value for a type ${type} question.`, "Remove default.");
+    }
+  }
 }
 
 function validateGroup(findings: Findings, group: unknown, path: string, scope: Scope): void {
@@ -649,6 +713,7 @@ export function validateSpec(kind: SpecKind, spec: unknown, context: SpecContext
     seenCodes: new Map(),
     existingCodes: new Set((context.existingQuestionCodes ?? []).map((code) => code.toLowerCase())),
     languages: kind === "survey" ? (isRecord(unescaped) ? languagesOfSurveySpec(unescaped.survey) : undefined) : context.languages,
+    generation: context.rankingGeneration,
     counters: { groups: 0, questions: 0, subquestions: 0, answers: 0 },
   };
 

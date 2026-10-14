@@ -6,7 +6,7 @@
 import { BASE_THEME_BY_TYPE, I18N_ATTRIBUTES } from "./attribute-defaults.js";
 import type { RpcClient } from "./scoped-client.js";
 import { normalizeSpec, type AttributeValue, type ComparableSpec, type DefaultValue, type TextMap } from "./spec-compare.js";
-import { isRecord } from "./spec-model.js";
+import { isRecord, NO_DEFAULT_TYPES } from "./spec-model.js";
 import { LimeSurveyError, type JsonValue } from "./types.js";
 
 /**
@@ -31,9 +31,6 @@ export const SPEC_QUESTION_PROPERTIES: readonly string[] = Object.freeze([
 ]);
 
 const PARALLEL_READS = 4;
-
-/** Question types that never carry a default value: no field map is read when a survey has nothing else. */
-const NO_DEFAULT_TYPES: ReadonlySet<string> = new Set(["X", "*", "|", "R"]);
 
 export interface MissingTranslation {
   path: string;
@@ -258,7 +255,8 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
     languages.forEach((language, index) => {
       const row = languageRows[index];
       if (!row || row.surveyls_title === null || row.surveyls_title === undefined) {
-        missing.push({ path: "survey.title", language });
+        // The row of this language is missing: every text of it is.
+        for (const field of ["title", "description", "welcometext", "endtext"]) missing.push({ path: `survey.${field}`, language });
         return;
       }
       surveyTexts.title[language] = str(row.surveyls_title);
@@ -331,6 +329,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
 
   // Default values per language.
   const needsDefaults = selectedRows.some((row) => !NO_DEFAULT_TYPES.has(str(row.type)));
+  // (Ranking and file upload questions have no default value, so a survey of nothing else needs no field map.)
   const defaultsByLanguage = needsDefaults
     ? await mapLimit(languages, PARALLEL_READS, (language) => readFieldDefaults(client, surveyId, language))
     : languages.map(() => new Map<string, FieldDefaults>());
@@ -343,7 +342,8 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
     languages.forEach((language, languageIndex) => {
       const row = groupByLanguage[languageIndex]?.get(gid);
       if (!row || row.group_name === null || row.group_name === undefined) {
-        missing.push({ path: `groups[${groupIndex}].title`, language });
+        // The row of this language is missing: every text of it is.
+        missing.push({ path: `groups[${groupIndex}].title`, language }, { path: `groups[${groupIndex}].description`, language });
         return;
       }
       title[language] = str(row.group_name);
@@ -364,26 +364,34 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
       const text: TextMap = {};
       const help: TextMap = {};
       const script: TextMap = {};
+      const missingLanguages: string[] = [];
       languages.forEach((language, languageIndex) => {
         const props = propertiesOf.get(`${qid}|${language}`);
         const fallback = questionByLanguage[languageIndex]?.get(qid);
         const question = props?.question ?? fallback?.question;
         if (props === undefined || question === null || question === undefined) {
-          missing.push({ path: `${questionPath}.text`, language });
+          missingLanguages.push(language);
           return;
         }
         text[language] = str(question);
         help[language] = str(props.help ?? fallback?.help);
         script[language] = str(props.script);
       });
+      // The row of a language is missing: every field of it is (the script only counts when the question has one).
+      const hasScript = Object.values(script).some((item) => item !== "");
+      for (const language of missingLanguages) {
+        missing.push({ path: `${questionPath}.text`, language }, { path: `${questionPath}.help`, language });
+        if (hasScript) missing.push({ path: `${questionPath}.script`, language });
+      }
 
+      // Attributes that depend on the language are the ones attributes_lang reports: the 16 known ones and any other
+      // (a plugin attribute stored per language). The rest, language independent, come with the base language.
+      const languageAttributeNames = new Set(languages.flatMap((language) => Object.keys(asRow(propsIn(language)?.attributes_lang) ?? {})));
       const attributes: Record<string, AttributeValue> = {};
       for (const [name, value] of Object.entries(asRow(baseProps?.attributes) ?? {})) {
-        if (!I18N_ATTRIBUTES.has(name)) attributes[name] = attributeValue(value);
+        if (!I18N_ATTRIBUTES.has(name) && !languageAttributeNames.has(name)) attributes[name] = attributeValue(value);
       }
-      const hasLanguageAttributes = languages.some((language) => (
-        Object.keys(asRow(propsIn(language)?.attributes_lang) ?? {}).some((name) => I18N_ATTRIBUTES.has(name))
-      ));
+      const hasLanguageAttributes = languageAttributeNames.size > 0;
       for (const language of languages) {
         const props = propsIn(language);
         if (props === undefined) {
@@ -392,7 +400,6 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
           continue;
         }
         for (const [name, value] of Object.entries(asRow(props.attributes_lang) ?? {})) {
-          if (!I18N_ATTRIBUTES.has(name)) continue;
           const perLanguage = (attributes[name] ??= {}) as TextMap;
           perLanguage[language] = attributeValue(value);
         }
@@ -457,11 +464,19 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
         }));
       } else {
         const multiscale = type === "1";
-        const baseOptions = parseOptions(baseProps?.answeroptions, multiscale);
         const optionsByLanguage = languages.map((language) => new Map(
           parseOptions(propsIn(language)?.answeroptions, multiscale).map((option) => [`${option.scale_id}:${option.code}`, option] as const),
         ));
-        answers = baseOptions.map((option, index) => {
+        // The answers are the union over all languages (an option without a text row in the base language must not
+        // vanish); what does not depend on the language comes from the first language that has the option.
+        const union = new Map<string, Option>();
+        for (const byCode of optionsByLanguage) {
+          for (const [key, option] of byCode) if (!union.has(key)) union.set(key, option);
+        }
+        const unionOptions = [...union.values()].sort(
+          (a, b) => a.scale_id - b.scale_id || a.order - b.order || compareText(a.code, b.code),
+        );
+        answers = unionOptions.map((option, index) => {
           const answerText: TextMap = {};
           languages.forEach((language, languageIndex) => {
             const found = optionsByLanguage[languageIndex]?.get(`${option.scale_id}:${option.code}`);
@@ -485,7 +500,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number, scope:
 
       const mandatory = str(column("mandatory"));
       const hasSubquestions = subRows.length > 0;
-      const questionDefault = hasSubquestions ? undefined : defaultsOf((entry) => entry.main);
+      const questionDefault = hasSubquestions || NO_DEFAULT_TYPES.has(type) ? undefined : defaultsOf((entry) => entry.main);
       const otherDefault = !hasSubquestions && (type === "L" || type === "!") && str(column("other")) === "Y"
         ? defaultsOf((entry) => entry.other)
         : undefined;

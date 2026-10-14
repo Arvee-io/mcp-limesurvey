@@ -4,7 +4,7 @@
  * every text is one string (it counts for every language of the survey) or a map per language, and questions carry
  * default values, a script and the columns LimeSurvey stores. The question types 1, : and ; are not supported yet.
  */
-import { I18N_ATTRIBUTES } from "./attribute-defaults.js";
+import { ATTRIBUTE_DEFAULTS, I18N_ATTRIBUTES } from "./attribute-defaults.js";
 import { unescapeHtmlSafe } from "./html-unescape.js";
 
 export type SpecKind = "survey" | "group" | "question";
@@ -22,6 +22,8 @@ export const NEED_BOTH: ReadonlySet<string> = new Set("FH"); // rows = subquesti
 export const OTHER_ALLOWED: ReadonlySet<string> = new Set("L!MP");
 /** The types whose "Other" option can have a default value of its own. */
 export const DEFAULT_OTHER_ALLOWED: ReadonlySet<string> = new Set("L!");
+/** The types that have no default value at all (Ranking and file upload). */
+export const NO_DEFAULT_TYPES: ReadonlySet<string> = new Set("R|");
 
 /** Question codes LimeSurvey reserves (compared without case, because the title collation is case-insensitive). */
 export const RESERVED_CODES: ReadonlySet<string> = new Set(
@@ -32,6 +34,7 @@ export const LANGUAGE_CODE_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,10}){0,3}$/;
 export const QUESTION_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
 export const SUBQUESTION_CODE_PATTERN = /^[A-Za-z0-9]{1,20}$/;
 export const ANSWER_CODE_PATTERN = /^[A-Za-z0-9]{1,5}$/;
+export const ANSWER_CODE_MAX_LENGTH = 5;
 export const MAX_QUESTION_CODE_LENGTH = 20;
 /** question_theme_name: the name of a question theme, for example listradio or bootstrap_buttons. */
 export const THEME_NAME_PATTERN = /^[A-Za-z0-9_/-]{1,100}$/;
@@ -42,6 +45,22 @@ export const EXPIRES_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Question attribute names LimeSurvey stores: a letter first, then letters, digits or underscores, at most 50. */
 export const ATTRIBUTE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,49}$/;
+
+/**
+ * Attributes known to be language independent: they stand in the table of some question theme and are not among the
+ * attributes stored per language. Every other name (a plugin or custom theme attribute) may be stored per language, so
+ * it takes a map per language as well as a plain value.
+ */
+const KNOWN_LANGUAGE_INDEPENDENT: ReadonlySet<string> = new Set(
+  Object.values(ATTRIBUTE_DEFAULTS).flatMap((table) => Object.keys(table)).filter((name) => !I18N_ATTRIBUTES.has(name)),
+);
+
+export function isKnownLanguageIndependent(attribute: string): boolean {
+  return KNOWN_LANGUAGE_INDEPENDENT.has(attribute);
+}
+
+/** The base question theme: core is a name for it (LimeSurvey stores it for questions that use no extended theme). */
+export const CORE_THEME = "core";
 /** survey.format: G group by group, S question by question, A all in one page, I inherit. */
 export const SURVEY_FORMATS = ["G", "A", "S", "I"] as const;
 
@@ -116,6 +135,8 @@ export interface NormalAnswer {
   code: string;
   text: TextMap;
   assessment_value: number;
+  /** Only an entry of a Ranking question on LimeSurvey 7 can have one other than 1. */
+  relevance: string;
 }
 
 export interface NormalSubquestion {
@@ -291,9 +312,11 @@ export function normalizeQuestion(question: unknown, languages: readonly string[
   const attributes: Record<string, string | TextMap> = {};
   if (isRecord(q.attributes)) {
     for (const [name, value] of Object.entries(q.attributes)) {
-      attributes[name] = I18N_ATTRIBUTES.has(name) ? expandText(value, languages) : asString(value);
+      // A map is kept as a map; a string at an attribute stored per language counts for every language.
+      attributes[name] = isRecord(value) || I18N_ATTRIBUTES.has(name) ? expandText(value, languages) : asString(value);
     }
   }
+  const theme = asString(q.question_theme_name);
   const records = (value: unknown): Array<Record<string, unknown>> => (
     Array.isArray(value) ? value.filter(isRecord) : []
   );
@@ -323,9 +346,10 @@ export function normalizeQuestion(question: unknown, languages: readonly string[
       code: asString(answer.code),
       text: expandText(answer.text, languages),
       assessment_value: typeof answer.assessment_value === "number" ? Math.trunc(answer.assessment_value) : 0,
+      relevance: asString(answer.relevance).trim() || "1",
     })),
     preg: asString(q.preg),
-    question_theme_name: asString(q.question_theme_name),
+    question_theme_name: theme === CORE_THEME ? "" : theme,
     encrypted: truthy(q.encrypted),
     same_default: sameDefault,
     same_script: truthy(q.same_script),

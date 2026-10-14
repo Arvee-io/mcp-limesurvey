@@ -83,10 +83,20 @@ export function specInvalidError(errors: readonly SpecFinding[], limit?: { workf
   return new LimeSurveyError(message, "SPEC_INVALID", details(shown));
 }
 
+export interface GenerateOptions {
+  /**
+   * How the entries of a Ranking question are written. "answers" (the default) is the file of the Python generator and
+   * what LimeSurvey 6 keeps: answers with a code of up to 5 characters and no relevance. "subquestions" is how
+   * LimeSurvey 7 stores them: subquestions of type R (scale 0) with a code of up to 20 characters and a relevance.
+   */
+  ranking?: "answers" | "subquestions";
+}
+
 /** Validates the spec and returns the .lss document. Throws LimeSurveyError SPEC_INVALID with the errors. */
-export function generateSurveyLss(spec: unknown): string {
+export function generateSurveyLss(spec: unknown, options: GenerateOptions = {}): string {
+  const ranking = options.ranking ?? "answers";
   const decoded = unescapeStrings(spec);
-  const validation = validateSpec("survey", decoded);
+  const validation = validateSpec("survey", decoded, { rankingGeneration: ranking === "subquestions" ? 7 : 6 });
   if (!validation.valid) throw specInvalidError(validation.errors);
   const sid = DEFAULT_SID;
   const norm = normalizeSurveySpec(decoded);
@@ -172,6 +182,18 @@ export function generateSurveyLss(spec: unknown): string {
       });
 
       question.answers.forEach((answer, sortOrder) => {
+        if (ranking === "subquestions" && question.type === "R") {
+          // LimeSurvey 7 keeps the entries of a Ranking question as subquestions of type R.
+          const entryQid = nextQid;
+          nextQid += 1;
+          subquestionRows.push({
+            qid: entryQid, parent_qid: qid, sid, gid, type: question.type, title: answer.code, preg: "", other: "N",
+            mandatory: "", question_order: sortOrder, scale_id: 0, same_default: 0, relevance: answer.relevance, encrypted: "N",
+            question_theme_name: "", same_script: 0, modulename: "",
+          });
+          addQuestionL10n(entryQid, answer.text, {}, {});
+          return;
+        }
         const aid = nextAid;
         nextAid += 1;
         answerRows.push({

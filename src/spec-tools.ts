@@ -6,6 +6,7 @@ import { strictInput } from "./input-schema.js";
 import { capLists, structuredSize } from "./response-limit.js";
 import { scopedClient, type ClientLevel, type RpcClient, type ScopeOptions } from "./scoped-client.js";
 import { diffSpecs, fingerprint, normalizeSpec, type SpecDifference } from "./spec-compare.js";
+import { limeSurveyGeneration } from "./limesurvey-generation.js";
 import { generateSurveyLss, specInvalidError } from "./spec-generate.js";
 import { isRecord, normalizeSurveySpec, unescapeStrings } from "./spec-model.js";
 import { readSurveyContext, readSurveySpec, type ReadScope } from "./spec-read.js";
@@ -92,6 +93,15 @@ const plainSpec = (spec: unknown): unknown => JSON.parse(JSON.stringify(spec ?? 
 
 const findingList = (findings: Array<SpecFinding | SpecWarning>): JsonValue => findings as unknown as JsonValue;
 
+/** Whether a spec of this kind has a question of type R (Ranking). */
+function hasRankingQuestion(kind: "survey" | "group" | "question", spec: unknown): boolean {
+  const isRanking = (question: unknown): boolean => isRecord(question) && question.type === "R";
+  const inGroup = (group: unknown): boolean => isRecord(group) && Array.isArray(group.questions) && group.questions.some(isRanking);
+  if (kind === "question") return isRanking(spec);
+  if (kind === "group") return inGroup(spec);
+  return isRecord(spec) && Array.isArray(spec.groups) && spec.groups.some(inGroup);
+}
+
 const SKIPPED_WITHOUT_SURVEY = [
   "Question codes are not compared with the codes the target survey already uses (give survey_id).",
   "A language map is not held to the languages of the target survey, only to being a map of language codes (give survey_id).",
@@ -114,7 +124,12 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "subquestion codes, attribute names, language codes (each once, none equal to the base language), "
         + "survey.format, survey.expires (a real date and time), XML-forbidden characters and embedded data URIs. A text "
         + "is one string (for every language) or a map per language; the map must name exactly the languages of the "
-        + "survey (a default value may name fewer), and only the attributes stored per language take a map. Without "
+        + "survey (a default value may name fewer); an empty question, subquestion or answer text is a warning. An "
+        + "attribute takes a map when it is stored per language (prefix, suffix, ...) or when no question theme lists it "
+        + "(a plugin attribute), not when it is known to be language independent. default is refused on questions with "
+        + "subquestions and on types R and |. An entry of a Ranking question may have a code of up to 20 characters and a "
+        + "relevance only on LimeSurvey 7: without survey_id this is a warning, with survey_id and kind group or question "
+        + "the version of the instance decides. Without "
         + "survey_id nothing is sent to LimeSurvey and skipped_checks lists the checks that need the survey (for kind "
         + "survey the languages come from the spec itself); with survey_id the tool reads the survey (read methods only) "
         + "and also reports question codes that already exist in it and holds language maps to its languages. In this "
@@ -135,10 +150,19 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
       const { kind, survey_id } = input;
       let context: Awaited<ReturnType<typeof readSurveyContext>> | undefined;
       if (survey_id !== undefined && kind !== "survey") context = await readSurveyContext(scoped, survey_id);
+      const spec = plainSpec(input.spec);
+      // With the survey at hand the generation is probed, so a Ranking entry is judged by the version of the instance.
+      const generation = context !== undefined && hasRankingQuestion(kind, spec) ? await limeSurveyGeneration(scoped, client) : undefined;
       const validation = validateSpec(
         kind,
-        plainSpec(input.spec),
-        context ? { existingQuestionCodes: context.questionCodes, languages: context.languages } : {},
+        spec,
+        context
+          ? {
+            existingQuestionCodes: context.questionCodes,
+            languages: context.languages,
+            ...(generation !== undefined ? { rankingGeneration: generation } : {}),
+          }
+          : {},
       );
       const warnings: Array<SpecFinding | SpecWarning> = [...validation.warnings];
       if (survey_id !== undefined && kind === "survey") {
@@ -187,21 +211,27 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "CREATE_SURVEY_FAILED names the created survey_id. The tool takes no file path, adds nothing to existing "
         + "surveys, activates nothing and deletes nothing. A spec can be checked beforehand with "
         + "limesurvey_validate_spec; limesurvey_get_survey_spec returns the spec of an existing survey in this format. "
-        + "A text is one string (for every language) or a map per language. The question types 1, : and ; are not "
-        + "supported yet. Needs the write scope content.",
+        + "A text is one string (for every language) or a map per language. A spec with a Ranking question makes the tool "
+        + "read the generation of the instance once (get_group_properties for group 0): on LimeSurvey 7 the entries are "
+        + "written as subquestions of type R (code up to 20 characters, with relevance), on LimeSurvey 6 as answers (code up "
+        + "to 5 characters, no relevance). The question types 1, : and ; are not supported yet. Needs the write scope content.",
       inputSchema: strictInput({ spec: specSchema }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async (input) => runScoped(config, client, "create_survey_from_spec", input, async (scoped) => {
       const spec = plainSpec(input.spec);
-      const validation = validateSpec("survey", spec);
+      // What a Ranking entry may have depends on the generation of LimeSurvey: probed once per client, and only when
+      // the spec has a Ranking question.
+      const generation = hasRankingQuestion("survey", spec) ? await limeSurveyGeneration(scoped, client) : undefined;
+      const validation = validateSpec("survey", spec, generation !== undefined ? { rankingGeneration: generation } : {});
       if (!validation.valid) {
         throw specInvalidError(validation.errors, { workflow: "create_survey_from_spec", maxChars: config.maxResponseChars });
       }
-      const lss = generateSurveyLss(spec);
+      const lss = generateSurveyLss(spec, { ranking: generation === 7 ? "subquestions" : "answers" });
       const { languages } = normalizeSurveySpec(unescapeStrings(spec));
-      const expectedSpec = normalizeSpec(spec, languages);
+      // Compared with surrounding blanks trimmed on both sides: LimeSurvey may store a text trimmed.
+      const expectedSpec = normalizeSpec(spec, languages, { trim: true });
       const title = expectedSpec.survey.title[expectedSpec.survey.language] ?? "";
 
       // The import call failed or answered without a survey ID: LimeSurvey may have created the survey anyway.
@@ -273,7 +303,7 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
           },
         );
       }
-      const differences = diffSpecs(expectedSpec, normalizeSpec(live.spec, languages));
+      const differences = diffSpecs(expectedSpec, normalizeSpec(live.spec, languages, { trim: true }));
       const questions = live.spec.groups.reduce((total, group) => total + group.questions.length, 0);
       const lists = {
         differences,
@@ -324,8 +354,10 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "question_id }]; level group: group_id and questions; level question: question_id and group_id) and position "
         + "gives the 1-based place of a group in the survey or of a question in its group. fingerprint is the SHA-256 of "
         + "the spec. unreadable lists what RemoteControl cannot read and the spec therefore lacks (conditions of the old "
-        + "condition table, quota members, URL parameter assignments, the default of the \"Other\" option of M and P "
-        + "questions, texts of a question that has no text row in a language); missing_translations lists the texts "
+        + "condition table, quota members, URL parameter assignments, stored attributes that the type, theme or a plugin "
+        + "does not define, archived response columns, at level survey the survey settings outside the spec, the default "
+        + "of the \"Other\" option of M and P questions, texts of a question that has no text row in a language); an entry "
+        + "that belongs to an element also has path and language. missing_translations lists the texts "
         + "that have no row in a survey language, which the map then lacks. The spec can be checked with "
         + "limesurvey_validate_spec and, at level survey, creates a copy with limesurvey_create_survey_from_spec. The "
         + "tool never shortens the answer: if it would exceed LIMESURVEY_MAX_RESPONSE_CHARS it answers SPEC_TOO_LARGE "
@@ -403,11 +435,12 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         const path = relative(item.path);
         return path === undefined ? [] : [{ path, language: item.language }];
       });
-      const unreadable: Array<{ code: string; detail: string }> = [
+      const unreadable: UnreadableEntry[] = [
         ...UNREADABLE_BY_REMOTE_CONTROL,
-        ...read.unreadable.flatMap((item) => {
+        ...(level === "survey" ? [SURVEY_SETTINGS_UNREADABLE] : []),
+        ...read.unreadable.flatMap((item): UnreadableEntry[] => {
           const path = relative(item.path);
-          return path === undefined ? [] : [{ code: "no_text_row", detail: `${path} (${item.language}): ${item.reason}` }];
+          return path === undefined ? [] : [{ code: "no_text_row", detail: item.reason, path, language: item.language }];
         }),
       ];
       if (questionsOf(level, spec).some((question) => (question.type === "M" || question.type === "P") && question.other)) {
@@ -454,8 +487,16 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
   );
 }
 
+/** One entry of unreadable: what, why, and (for something that belongs to an element) where, relative to the level. */
+interface UnreadableEntry {
+  code: string;
+  detail: string;
+  path?: string;
+  language?: string;
+}
+
 /** What RemoteControl cannot read, whatever the survey: the spec lacks it, so a copy built from the spec lacks it too. */
-const UNREADABLE_BY_REMOTE_CONTROL: ReadonlyArray<{ code: string; detail: string }> = [
+const UNREADABLE_BY_REMOTE_CONTROL: readonly UnreadableEntry[] = [
   {
     code: "legacy_conditions",
     detail: "Conditions of the old condition table cannot be read. Conditions that were entered as ExpressionScript are in the "
@@ -471,9 +512,27 @@ const UNREADABLE_BY_REMOTE_CONTROL: ReadonlyArray<{ code: string; detail: string
     detail: "URL parameter assignments (survey parameters that fill a question) cannot be read, so they are not in the spec and "
       + "a survey created from the spec has none.",
   },
+  {
+    code: "undefined_attributes",
+    detail: "Question attributes that are stored but that the question type, the question theme or a plugin does not define are "
+      + "not returned by RemoteControl, so they are not in the spec and a survey created from the spec lacks them.",
+  },
+  {
+    code: "archived_responses",
+    detail: "Archived response tables are bound to the ID of the question they hold answers for. They cannot be read, and a "
+      + "question created from the spec has a new ID, so it does not pick up the archived answers.",
+  },
 ];
 
-const OTHER_DEFAULT_UNREADABLE = {
+/** Only a whole survey has settings: the spec holds a few of them, the rest is out of its reach. */
+const SURVEY_SETTINGS_UNREADABLE: UnreadableEntry = {
+  code: "survey_settings",
+  detail: "Survey settings and language fields outside the spec are not read: navigation and display settings, participant and "
+    + "assessment settings, e-mail templates, the end URL, the privacy texts and the date and number format. A survey "
+    + "created from the spec has the defaults for them.",
+};
+
+const OTHER_DEFAULT_UNREADABLE: UnreadableEntry = {
   code: "other_default",
   detail: "The default value of the \"Other\" option of an M or P question cannot be read, so default_other is missing for these "
     + "questions even if the survey has one.",
