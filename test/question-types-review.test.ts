@@ -165,6 +165,41 @@ for (const [label, target, field, change] of DIGIT_CODES) {
   });
 }
 
+test("[GEN-B] generation 6: a relevance that names rank 2 of a Ranking question by {sid}X{gid}X{qid}2 reports sgqa_references for a replacement, and the real run writes nothing", async () => {
+  // LimeSurvey 6 names the ranks of an R question {sid}X{gid}X{qid}1 .. {qid}n (common_helper.php 6.17.11:1532-1916,
+  // research-gen-types.md section 2): a digit right after the ID.
+  const ranking: Json = {
+    code: "R1",
+    type: "R",
+    text: both("Bitte ordnen", "Please rank"),
+    answers: [{ code: "A", text: both("Anton", "Anton") }, { code: "B", text: both("Berta", "Berta") }, { code: "C", text: both("Cäsar", "Caesar") }],
+  };
+  const { fake, sid, question } = await setup(surveyWith([ranking]), 6);
+  const old = question("R1");
+  // The counter-check: no question of the survey has the ID that the digits could also spell (old ID followed by 2).
+  assert.ok(!fake.questions.some((item) => item.qid === old.qid * 10 + 2), "no question has the ID old qid * 10 + 2");
+  question("Q9").relevance = `${sid}X${old.gid}X${old.qid}2 == "B"`;
+  await withSession(async (session) => {
+    const read = await readOk(session, { survey_id: sid, question_id: old.qid });
+    const desired = clone(read.spec);
+    desired.answers.push({ code: "D", text: both("Dora", "Dora") });
+    const shown = await updateQuestionOk(session, dry(sid, old.qid, desired));
+    assert.equal(shown.mode, "replace", JSON.stringify(shown.changes));
+    const risk = riskOf(shown.risks, "sgqa_references");
+    assert.ok(risk, `relevance ${question("Q9").relevance}: ${JSON.stringify(shown.risks)}`);
+    assert.equal(risk.blocking, true);
+    assert.equal(risk.acknowledgeable, false);
+    assert.match(JSON.stringify(risk.locations), /Q9/);
+
+    const before = fake.requests.length;
+    const error = await updateQuestionError(session, real(sid, old.qid, desired, read.fingerprint, ALL_ACK));
+    assert.equal(error.code, "UPDATE_QUESTION_BLOCKED", JSON.stringify(error).slice(0, 1500));
+    assert.ok(riskOf(error.details?.risks, "sgqa_references"), JSON.stringify(error.details));
+    assert.deepEqual(writeMethodsSince(fake, before), [], "nothing is written");
+  }, { fake });
+  assert.equal(question("R1").qid, old.qid, "the question keeps its ID");
+});
+
 // ================================================================ MINOR: replacing a type 1 question
 
 for (const generation of GENERATIONS) {
