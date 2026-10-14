@@ -700,7 +700,16 @@ async function questionRisks(input: RiskInput): Promise<{ risks: Risk[]; notes: 
         .sort((a, b) => b.length - a.length)
         .map(escapeRegExp);
       const fieldOfOwnCode = ownCodes.length > 0 ? `|(?:${ownCodes.join("|")})(?:comment|other)?(?![A-Za-z0-9])` : "";
-      const sgqa = new RegExp(`(?<![0-9])${input.surveyId}X${input.groupId}X${input.questionId}(?:(?![0-9])${fieldOfOwnCode})`);
+      // LimeSurvey 6 names the ranks of a Ranking question {sid}X{gid}X{qid}1 .. {qid}n, n up to the number of entries or
+      // max_subquestions (common_helper.php 6.17.11:1532-1916, research-gen-types.md section 2): the rank, then no digit.
+      let fieldOfRank = "";
+      if (current.type === "R" && await input.generation() === 6) {
+        const limit = current.attributes.max_subquestions;
+        const count = Math.max(current.answers.length, typeof limit === "string" ? Number.parseInt(limit, 10) || 0 : 0);
+        const ranks = Array.from({ length: count }, (_unused, index) => String(count - index));
+        if (ranks.length > 0) fieldOfRank = `|(?:${ranks.join("|")})(?![0-9])`;
+      }
+      const sgqa = new RegExp(`(?<![0-9])${input.surveyId}X${input.groupId}X${input.questionId}(?:(?![0-9])${fieldOfOwnCode}${fieldOfRank})`);
       const qidName = `Q${input.questionId}`;
       const qidPattern = new RegExp(`(?<![A-Za-z0-9_])${qidName}(?![0-9])`);
       const qidHits = hits((expression) => qidPattern.test(expression));
