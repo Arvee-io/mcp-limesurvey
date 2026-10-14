@@ -229,7 +229,8 @@ test("assigns an installed theme through set_survey_properties", async () => {
   const mockFetch: typeof fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
     requests.push(request);
-    // get_survey_properties reads the assigned template back, so the assignment counts as applied.
+    // get_survey_properties reads the previous and the assigned template; both are the same here, so the assignment
+    // counts as applied.
     const result = request.method === "get_session_key"
       ? "session-theme"
       : request.method === "get_survey_properties" ? { template: "weit_feedback" } : { template: true };
@@ -242,8 +243,8 @@ test("assigns an installed theme through set_survey_properties", async () => {
       arguments: { survey_id: 123, theme_name: "weit_feedback", confirm_theme_assignment: true },
     });
     assert.equal(assigned.isError, undefined);
-    assert.equal(requests[1]?.method, "set_survey_properties");
-    assert.deepEqual(requests[1]?.params, ["session-theme", 123, { template: "weit_feedback" }]);
+    const set = requests.find((request) => request.method === "set_survey_properties");
+    assert.deepEqual(set?.params, ["session-theme", 123, { template: "weit_feedback" }]);
   } finally {
     await mcpClient.close();
     await server.close();

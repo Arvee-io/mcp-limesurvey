@@ -24,7 +24,9 @@ const baseConfig: LimeSurveyConfig = {
 
 type Responder = (request: JsonRpcRequest) => JsonValue;
 
-async function session(options: { themeDir?: string; responder?: Responder } = {}) {
+async function session(
+  options: { themeDir?: string; responder?: Responder; config?: Partial<LimeSurveyConfig> } = {},
+) {
   const requests: JsonRpcRequest[] = [];
   const mockFetch: typeof fetch = async (_input, init) => {
     const request = JSON.parse(String(init?.body)) as JsonRpcRequest;
@@ -32,7 +34,11 @@ async function session(options: { themeDir?: string; responder?: Responder } = {
     const result = request.method === "get_session_key" ? "session-theme" : (options.responder?.(request) ?? null);
     return new Response(JSON.stringify({ id: request.id, result, error: null }));
   };
-  const config = options.themeDir ? { ...baseConfig, themeDir: options.themeDir } : baseConfig;
+  const config = {
+    ...baseConfig,
+    ...options.config,
+    ...(options.themeDir ? { themeDir: options.themeDir } : {}),
+  };
   const created = createServer(config, mockFetch);
   const client = new Client({ name: "theme-ls7-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -56,17 +62,32 @@ function result(structured: unknown): Record<string, unknown> {
 }
 
 /**
- * set_survey_properties answers {template: true} like LimeSurvey does even when it silently keeps another theme;
- * get_survey_properties returns `stored` or, without it, the template that was set.
+ * A survey whose template starts as `initial`. set_survey_properties answers {template: true} like LimeSurvey does even
+ * when it silently keeps another theme, and stores `stored` or, without it, the template that was set;
+ * get_survey_properties returns the current template.
  */
-function surveyTemplateResponder(stored?: string): Responder {
-  let lastSet: JsonValue = null;
+function surveyTemplateResponder(stored?: string, initial = "fruity_twentythree"): Responder {
+  let current: JsonValue = initial;
   return (request) => {
     if (request.method === "set_survey_properties") {
-      lastSet = (request.params[2] as { template?: JsonValue } | undefined)?.template ?? null;
+      current = stored ?? (request.params[2] as { template?: JsonValue } | undefined)?.template ?? null;
       return { template: true };
     }
-    if (request.method === "get_survey_properties") return { template: stored ?? lastSet };
+    if (request.method === "get_survey_properties") return { template: current };
+    return null;
+  };
+}
+
+/** Answers get_survey_properties with the next value of `reads` (the last one repeats) and set with `setResult`. */
+function scriptedResponder(reads: JsonValue[], setResult: JsonValue = { template: true }): Responder {
+  let index = 0;
+  return (request) => {
+    if (request.method === "set_survey_properties") return setResult;
+    if (request.method === "get_survey_properties") {
+      const value = reads[Math.min(index, reads.length - 1)] ?? null;
+      index += 1;
+      return value;
+    }
     return null;
   };
 }
@@ -88,12 +109,23 @@ function themePackage(
   installedName: string,
   options: {
     title?: string | null;
+    /** Parent theme; null leaves metadata/extends out. */
+    parent?: string | null;
+    /** Adds an engine section (needed by a theme without a parent). */
+    engine?: boolean;
+    compatibility?: string[];
     css?: string;
     views?: Record<string, string>;
     files?: Record<string, string | Buffer>;
   } = {},
 ): JSZip {
   const title = options.title === undefined ? "LimeSurvey 7 Test Theme" : options.title;
+  const parent = options.parent === undefined ? "vanilla" : options.parent;
+  const compatibility = (options.compatibility ?? ["7.0"]).map((version) => `    <version>${version}</version>\n`).join("");
+  const engine = options.engine
+    ? "  <engine>\n    <cssframework><name>bootstrap</name></cssframework>\n"
+      + "    <viewdirectory>views</viewdirectory>\n    <filesdirectory>files</filesdirectory>\n  </engine>\n"
+    : "";
   const zip = new JSZip();
   zip.file(
     "config.xml",
@@ -107,12 +139,10 @@ ${title === null ? "" : `    <title>${title}</title>\n`}    <type>theme</type>
     <version>1.0.0</version>
     <apiVersion>3</apiVersion>
     <description>Hand-built package for the LimeSurvey 7 import rules.</description>
-    <extends>vanilla</extends>
-  </metadata>
+${parent === null ? "" : `    <extends>${parent}</extends>\n`}  </metadata>
   <compatibility>
-    <version>7.0</version>
-  </compatibility>
-  <files>
+${compatibility}  </compatibility>
+${engine}  <files>
     <css>
       <add>css/mcp-theme.css</add>
     </css>
@@ -137,10 +167,15 @@ ${title === null ? "" : `    <title>${title}</title>\n`}    <type>theme</type>
 
 type Validation = { valid: boolean; errors: string[]; warnings: string[]; installed_theme_name?: string };
 
-async function validate(fileName: string, zip: JSZip): Promise<Validation> {
+async function validate(
+  fileName: string,
+  zip: JSZip | Buffer,
+  config: Partial<LimeSurveyConfig> = {},
+): Promise<Validation> {
   return withThemeDir(async (themeDir) => {
-    await writeFile(path.join(themeDir, fileName), await zip.generateAsync({ type: "nodebuffer" }), { mode: 0o600 });
-    const current = await session({ themeDir });
+    const archive = Buffer.isBuffer(zip) ? zip : await zip.generateAsync({ type: "nodebuffer" });
+    await writeFile(path.join(themeDir, fileName), archive, { mode: 0o600 });
+    const current = await session({ themeDir, config });
     try {
       const response = await current.client.callTool({
         name: "limesurvey_validate_survey_theme",
@@ -249,6 +284,31 @@ test("[THEME-9] generate warns when the version digits without dots are ambiguou
   });
 });
 
+test("[THEME-9] THEME_NAME_TOO_LONG never names a negative length and suggests shortening theme_version", async () => {
+  await withThemeDir(async (themeDir) => {
+    const current = await session({ themeDir });
+    try {
+      // 41 version digits plus "-" and "-ls7" already exceed 45 characters without any theme_name.
+      const response = await current.client.callTool({
+        name: "limesurvey_generate_survey_theme",
+        arguments: {
+          theme_name: "weit_feedback",
+          title: "Long version",
+          theme_version: `${"1".repeat(20)}.${"2".repeat(20)}.3`,
+        },
+      });
+      assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+      const text = JSON.stringify(response.content);
+      assert.doesNotMatch(text, /at most -\d/);
+      assert.match(text, /shorten/i);
+      assert.match(text, /theme_version/);
+      assert.deepEqual(await readdir(themeDir), []);
+    } finally {
+      await current.close();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // assign
 // ---------------------------------------------------------------------------------------------------------------------
@@ -286,6 +346,9 @@ test("[THEME-9] assign rejects names LimeSurvey cannot install, without an RPC c
   }
 });
 
+// The RPC sequence of an assignment: read the previous theme, set the new one, read it back.
+const assignSequence = ["get_survey_properties", "set_survey_properties", "get_survey_properties"];
+
 test("[THEME-9] assign reports THEME_NOT_APPLIED when LimeSurvey silently keeps another theme", async () => {
   const current = await session({ responder: surveyTemplateResponder("fruity_twentythree") });
   try {
@@ -298,8 +361,11 @@ test("[THEME-9] assign reports THEME_NOT_APPLIED when LimeSurvey silently keeps 
     const text = JSON.stringify(response.structuredContent);
     assert.match(text, /weit_feedback-100-ls7/);
     assert.match(text, /fruity_twentythree/);
-    assert.match(text, /limesurvey_list_installed_themes/);
-    assert.deepEqual(current.methods(), ["set_survey_properties", "get_survey_properties"]);
+    // limesurvey_list_installed_themes cannot list installed names (only local ZIPs and themes already in use), so the
+    // recovery points to the theme list and to installed_theme_name instead.
+    assert.doesNotMatch(text, /limesurvey_list_installed_themes/);
+    assert.match(text, /installed_theme_name/);
+    assert.deepEqual(current.methods(), assignSequence);
   } finally {
     await current.close();
   }
@@ -314,9 +380,10 @@ test("[THEME-9] assign reads the template back after setting it and reports veri
     });
     assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
     assert.equal(result(response.structuredContent).verified, true);
-    assert.deepEqual(current.methods(), ["set_survey_properties", "get_survey_properties"]);
-    const readBack = current.requests.find((request) => request.method === "get_survey_properties");
-    assert.deepEqual(readBack?.params, ["session-theme", 123, ["template"]]);
+    assert.deepEqual(current.methods(), assignSequence);
+    for (const read of current.requests.filter((request) => request.method === "get_survey_properties")) {
+      assert.deepEqual(read.params, ["session-theme", 123, ["template"]]);
+    }
   } finally {
     await current.close();
   }
@@ -324,11 +391,7 @@ test("[THEME-9] assign reads the template back after setting it and reports veri
 
 test("[THEME-9] assign reports THEME_NOT_VERIFIED with written: true when only the read-back fails", async () => {
   const current = await session({
-    responder: (request) => {
-      if (request.method === "set_survey_properties") return { template: true };
-      if (request.method === "get_survey_properties") return { status: "Error: No permission" };
-      return null;
-    },
+    responder: scriptedResponder([{ template: "fruity_twentythree" }, { status: "Error: No permission" }]),
   });
   try {
     const response = await current.client.callTool({
@@ -341,7 +404,119 @@ test("[THEME-9] assign reports THEME_NOT_VERIFIED with written: true when only t
     const details = (body.details ?? {}) as Record<string, unknown>;
     assert.equal(details.written, true);
     assert.match(String(details.recovery), /limesurvey_get_survey_properties/);
-    assert.deepEqual(current.methods(), ["set_survey_properties", "get_survey_properties"]);
+    assert.deepEqual(current.methods(), assignSequence);
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign reports THEME_NOT_VERIFIED when the read-back has no template string", async () => {
+  const current = await session({ responder: scriptedResponder([{ template: "fruity_twentythree" }, {}]) });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+    assert.equal(result(response.structuredContent).code, "THEME_NOT_VERIFIED");
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign reports THEME_NOT_APPLIED when LimeSurvey refuses to save the survey", async () => {
+  const current = await session({
+    responder: scriptedResponder([{ template: "fruity_twentythree" }], { template: false }),
+  });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+    assert.equal(result(response.structuredContent).code, "THEME_NOT_APPLIED");
+    assert.match(JSON.stringify(response.structuredContent), /refused to save/i);
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign writes nothing when the previous theme cannot be read", async () => {
+  const current = await session({ responder: scriptedResponder([{ status: "Error: No permission" }]) });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+    assert.deepEqual(current.methods(), ["get_survey_properties"]);
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign reports previous_theme and whether the survey changed", async () => {
+  const changed = await session({ responder: surveyTemplateResponder(undefined, "vanilla") });
+  try {
+    const response = await changed.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const body = result(response.structuredContent);
+    assert.equal(body.previous_theme, "vanilla");
+    assert.equal(body.changed, true);
+  } finally {
+    await changed.close();
+  }
+
+  const same = await session({ responder: surveyTemplateResponder(undefined, "weit_feedback-100-ls7") });
+  try {
+    const response = await same.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const body = result(response.structuredContent);
+    assert.equal(body.previous_theme, "weit_feedback-100-ls7");
+    assert.equal(body.changed, false);
+  } finally {
+    await same.close();
+  }
+});
+
+test("[THEME-9] THEME_NOT_APPLIED names previous_theme and asks to restore it when the survey changed", async () => {
+  // The survey used vanilla; LimeSurvey stored its default theme instead of the requested one.
+  const current = await session({ responder: surveyTemplateResponder("fruity_twentythree", "vanilla") });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+    const body = result(response.structuredContent);
+    assert.equal(body.code, "THEME_NOT_APPLIED");
+    const details = (body.details ?? {}) as Record<string, unknown>;
+    assert.equal(details.previous_theme, "vanilla");
+    assert.equal(details.changed, true);
+    assert.match(String(details.recovery), /restore/i);
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign names set_survey_properties as the rollback when the survey inherited its theme", async () => {
+  const current = await session({ responder: surveyTemplateResponder(undefined, "inherit") });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    const body = result(response.structuredContent);
+    assert.equal(body.previous_theme, "inherit");
+    assert.match(String(body.rollback), /limesurvey_set_survey_properties/);
+    assert.match(String(body.rollback), /inherit/);
   } finally {
     await current.close();
   }
@@ -358,6 +533,8 @@ test("[THEME-9] assign refuses inherit without an RPC call and points to the adm
     const text = JSON.stringify(response.content);
     assert.match(text, /inherit/);
     assert.match(text, /admin/i);
+    // The reason: the read-back only confirms the stored value, not the theme the survey group passes on.
+    assert.match(text, /group/i);
     assert.equal(current.requests.length, 0);
   } finally {
     await current.close();
@@ -525,6 +702,144 @@ test("[THEME-9] validate keeps an archive path that leaves the theme folder an e
   assert.ok(validation.errors.some((error) => error.includes("../evil.css")), JSON.stringify(validation.errors));
 });
 
+test("[THEME-9] validate rejects a metadata/title longer than 100 characters", async () => {
+  const validation = await validate("long_title-1.0.0-ls7.zip", themePackage("long_title-100-ls7", { title: "T".repeat(101) }));
+  assert.equal(validation.valid, false);
+  assert.ok(
+    validation.errors.some((error) => /title/.test(error) && error.includes("100")),
+    JSON.stringify(validation.errors),
+  );
+});
+
+test("[THEME-9] validate rejects a theme without parent and engine, and warns about a standalone theme", async () => {
+  const bare = await validate("bare_theme-1.0.0-ls7.zip", themePackage("bare_theme-100-ls7", { parent: null }));
+  assert.equal(bare.valid, false);
+  assert.ok(bare.errors.some((error) => /extends/.test(error) && /engine/.test(error)), JSON.stringify(bare.errors));
+
+  const standalone = await validate(
+    "standalone-1.0.0-ls7.zip",
+    themePackage("standalone-100-ls7", { parent: null, engine: true }),
+  );
+  assert.deepEqual(standalone.errors, []);
+  assert.equal(standalone.valid, true);
+  assert.ok(
+    standalone.warnings.some((warning) => warning.startsWith("policy:") && /no parent/i.test(warning)),
+    JSON.stringify(standalone.warnings),
+  );
+});
+
+test("[THEME-9] validate rejects a compatibility list with only versions below 6", async () => {
+  const validation = await validate("old_compat-1.0.0-ls7.zip", themePackage("old_compat-100-ls7", { compatibility: ["5.0"] }));
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => /compatibility/i.test(error)), JSON.stringify(validation.errors));
+});
+
+test("[THEME-9] validate rejects characters LimeSurvey refuses in the installed name", async () => {
+  // LimeSurvey keeps "%" when it derives the folder name and then refuses it (Template.php:51).
+  const validation = await validate("bad%name-1.0.0-ls7.zip", themePackage("bad%name-100-ls7"));
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => error.includes("bad%name-100-ls7")), JSON.stringify(validation.errors));
+});
+
+test("[THEME-9] validate rejects views/ that only holds files the import skips", async () => {
+  const zip = themePackage("skipped_views-100-ls7", { views: {} });
+  zip.file("views/x.html", "<p>x</p>\n", { createFolders: false });
+  const validation = await validate("skipped_views-1.0.0-ls7.zip", zip);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => error.includes("views/ directory")), JSON.stringify(validation.errors));
+});
+
+test("[THEME-9] validate warns about a missing 7.x compatibility entry except in a package marked -ls6", async () => {
+  const missing7 = (warning: string) => warning.startsWith("policy:") && /7\.x/.test(warning);
+  const ls7 = await validate("six_only-1.0.0-ls7.zip", themePackage("six_only-100-ls7", { compatibility: ["6.0"] }));
+  assert.equal(ls7.valid, true, JSON.stringify(ls7.errors));
+  assert.ok(ls7.warnings.some(missing7), JSON.stringify(ls7.warnings));
+
+  const ls6 = await validate("six_only-1.0.0-ls6.zip", themePackage("six_only-100-ls6", { compatibility: ["6.0"] }));
+  assert.equal(ls6.valid, true, JSON.stringify(ls6.errors));
+  assert.equal(ls6.warnings.some(missing7), false, JSON.stringify(ls6.warnings));
+});
+
+test("[THEME-9] validate stops at more than 1000 entries without reading config.xml", async () => {
+  const zip = new JSZip();
+  // Not well-formed: reading it would add a second error.
+  zip.file("config.xml", "<config><metadata><title>Broken & unclosed", { createFolders: false });
+  for (let index = 0; index < 1000; index += 1) {
+    zip.file(`files/n${String(index).padStart(4, "0")}.txt`, "x", { createFolders: false });
+  }
+  assert.equal(Object.keys(zip.files).length, 1001);
+  const validation = await validate("many_entries-1.0.0-ls7.zip", zip);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.errors.length, 1, JSON.stringify(validation.errors));
+  assert.match(validation.errors[0] ?? "", /1000/);
+});
+
+test("[THEME-9] validate reports only the oversized entry and decompresses nothing before the size check", async () => {
+  const limit = 64 * 1024;
+  const zip = themePackage("big_entry-100-ls7", { files: { "files/fake.png": "not a png\n" } });
+  zip.file("files/big.txt", `BIGDATA${"x".repeat(limit + 1 - "BIGDATA".length)}`);
+  // Stored without compression; one changed byte breaks the CRC-32 the ZIP declares for files/big.txt, so decompressing
+  // (or checking) that entry before the size check would fail the whole validation.
+  const archive = await zip.generateAsync({ type: "nodebuffer" });
+  const marker = archive.indexOf("BIGDATA");
+  assert.ok(marker > 0);
+  archive[marker + "BIGDATA".length] = "y".charCodeAt(0);
+
+  const validation = await validate("big_entry-1.0.0-ls7.zip", archive, { maxThemeAssetBytes: limit });
+  assert.equal(validation.valid, false);
+  assert.equal(validation.errors.length, 1, JSON.stringify(validation.errors));
+  assert.ok(validation.errors[0]?.includes("files/big.txt"), JSON.stringify(validation.errors));
+});
+
+test("[THEME-9] validate rejects a config.xml that is not well-formed", async () => {
+  // An unescaped "&" makes the XML not well-formed; LimeSurvey cannot load such a manifest.
+  const validation = await validate("bad_xml-1.0.0-ls7.zip", themePackage("bad_xml-100-ls7", { title: "Feedback & Survey" }));
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => error.includes("config.xml")), JSON.stringify(validation.errors));
+});
+
+test("[THEME-9] validate reports .twig templates as a policy warning", async () => {
+  const validation = await validate(
+    "twig_theme-1.0.0-ls7.zip",
+    themePackage("twig_theme-100-ls7", {
+      views: { "views/README.txt": "Inherited views.\n", "views/layout_global.twig": "{# override #}\n" },
+    }),
+  );
+  assert.deepEqual(validation.errors, []);
+  assert.equal(validation.valid, true);
+  assert.ok(
+    validation.warnings.some((warning) => warning.startsWith("policy:") && warning.includes("views/layout_global.twig")),
+    JSON.stringify(validation.warnings),
+  );
+});
+
+test("[THEME-9] validate prefixes the reduced-motion and focus rules with policy:", async () => {
+  const validation = await validate(
+    "plain_css-1.0.0-ls7.zip",
+    themePackage("plain_css-100-ls7", { css: "@media (max-width: 575.98px) { body { color: #111111; } }\n" }),
+  );
+  assert.equal(validation.valid, true, JSON.stringify(validation.errors));
+  for (const rule of [/reduced-motion/i, /focus/i]) {
+    assert.ok(
+      validation.warnings.some((warning) => warning.startsWith("policy:") && rule.test(warning)),
+      `${rule}: ${JSON.stringify(validation.warnings)}`,
+    );
+  }
+});
+
+test("[THEME-9] validate checks the JPEG signature at the start only", async () => {
+  // Valid start of a JPEG (SOI + APP0 marker); the end-of-image marker is followed by padding bytes.
+  const jpeg = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    Buffer.alloc(16),
+    Buffer.from([0xff, 0xd9]),
+    Buffer.alloc(4),
+  ]);
+  const validation = await validate("jpeg_theme-1.0.0-ls7.zip", themePackage("jpeg_theme-100-ls7", { files: { "files/photo.jpg": jpeg } }));
+  assert.deepEqual(validation.errors, []);
+  assert.equal(validation.valid, true);
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // publication guide
 // ---------------------------------------------------------------------------------------------------------------------
@@ -554,4 +869,39 @@ test("[THEME-9] the publication guide names the installed theme name and the imp
   } finally {
     await current.close();
   }
+});
+
+async function guideFor(packageFileName: string): Promise<Record<string, unknown>> {
+  const current = await session();
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_get_theme_publication_guide",
+      arguments: {
+        theme_name: "weit_feedback",
+        package_file_name: packageFileName,
+        installed_limesurvey_version: "7.5.1",
+        hosting: "self_hosted",
+      },
+    });
+    assert.equal(response.isError, undefined, JSON.stringify(response.structuredContent));
+    return result(response.structuredContent);
+  } finally {
+    await current.close();
+  }
+}
+
+test("[THEME-9] the publication guide asks to review every policy: warning before the import", async () => {
+  const guide = await guideFor("weit_feedback-1.0.0-ls7.zip");
+  const steps = guide.steps as unknown[];
+  const first = String(steps[0]);
+  assert.match(first, /valid=true/);
+  assert.match(first, /policy:/);
+  const stopConditions = guide.stop_conditions as unknown[];
+  assert.ok(stopConditions.some((condition) => /policy:/.test(String(condition))), JSON.stringify(stopConditions));
+});
+
+test("[THEME-9] the publication guide still returns current_reference.current_ce_release", async () => {
+  const guide = await guideFor("weit_feedback-1.0.0-ls7.zip");
+  const reference = (guide.current_reference ?? {}) as Record<string, unknown>;
+  assert.ok(String(reference.current_ce_release).startsWith("7.5.1"), JSON.stringify(reference));
 });
