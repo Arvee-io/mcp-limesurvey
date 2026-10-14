@@ -875,7 +875,7 @@ The 39 automated tests use mocked LimeSurvey JSON-RPC responses and cover:
 No live LimeSurvey credentials are required. Content evaluations must be created
 against a stable test instance; see [evaluations/README.md](evaluations/README.md).
 
-An opt-in live integration runner exercises all 75 tools against disposable,
+An opt-in live integration runner exercises all 82 tools against disposable,
 prefixed test records:
 
 ```bash
