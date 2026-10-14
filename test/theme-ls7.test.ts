@@ -86,7 +86,12 @@ async function withThemeDir<T>(run: (themeDir: string) => Promise<T>): Promise<T
  */
 function themePackage(
   installedName: string,
-  options: { title?: string | null; views?: Record<string, string>; files?: Record<string, string | Buffer> } = {},
+  options: {
+    title?: string | null;
+    css?: string;
+    views?: Record<string, string>;
+    files?: Record<string, string | Buffer>;
+  } = {},
 ): JSZip {
   const title = options.title === undefined ? "LimeSurvey 7 Test Theme" : options.title;
   const zip = new JSZip();
@@ -117,9 +122,10 @@ ${title === null ? "" : `    <title>${title}</title>\n`}    <type>theme</type>
   );
   zip.file(
     "css/mcp-theme.css",
-    "@media (max-width: 575.98px) { body { color: #111111; } }\n"
-      + ":focus-visible { outline: 3px solid #005FCC; }\n"
-      + "@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }\n",
+    options.css
+      ?? "@media (max-width: 575.98px) { body { color: #111111; } }\n"
+        + ":focus-visible { outline: 3px solid #005FCC; }\n"
+        + "@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }\n",
   );
   zip.file("LICENSE.txt", "GNU General Public License version 2 or later\n");
   for (const [name, content] of Object.entries(options.views ?? { "views/README.txt": "Inherited views.\n" })) {
@@ -212,6 +218,37 @@ test("[THEME-9] generate refuses a theme_name whose installed name would exceed 
   });
 });
 
+test("[THEME-9] generate warns when the version digits without dots are ambiguous in the installed name", async () => {
+  await withThemeDir(async (themeDir) => {
+    const current = await session({ themeDir });
+    try {
+      // 1.10.0 and 11.0.0 both become weit_feedback-1100-ls7; the second import would stop with "already exists".
+      const ambiguous = await current.client.callTool({
+        name: "limesurvey_generate_survey_theme",
+        arguments: { theme_name: "weit_feedback", title: "WEIT Feedback", theme_version: "1.10.0" },
+      });
+      assert.equal(ambiguous.isError, undefined, JSON.stringify(ambiguous.structuredContent));
+      const generated = result(ambiguous.structuredContent);
+      assert.equal(generated.installed_theme_name, "weit_feedback-1100-ls7");
+      assert.ok(Array.isArray(generated.warnings), JSON.stringify(generated));
+      assert.ok(
+        (generated.warnings as unknown[]).some((warning) => String(warning).includes("1100")),
+        JSON.stringify(generated.warnings),
+      );
+
+      // Single-digit components cannot collide: no warning.
+      const plain = await current.client.callTool({
+        name: "limesurvey_generate_survey_theme",
+        arguments: { theme_name: "weit_feedback", title: "WEIT Feedback", theme_version: "1.0.0" },
+      });
+      assert.equal(plain.isError, undefined, JSON.stringify(plain.structuredContent));
+      assert.deepEqual(result(plain.structuredContent).warnings ?? [], []);
+    } finally {
+      await current.close();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // assign
 // ---------------------------------------------------------------------------------------------------------------------
@@ -280,6 +317,48 @@ test("[THEME-9] assign reads the template back after setting it and reports veri
     assert.deepEqual(current.methods(), ["set_survey_properties", "get_survey_properties"]);
     const readBack = current.requests.find((request) => request.method === "get_survey_properties");
     assert.deepEqual(readBack?.params, ["session-theme", 123, ["template"]]);
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign reports THEME_NOT_VERIFIED with written: true when only the read-back fails", async () => {
+  const current = await session({
+    responder: (request) => {
+      if (request.method === "set_survey_properties") return { template: true };
+      if (request.method === "get_survey_properties") return { status: "Error: No permission" };
+      return null;
+    },
+  });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "weit_feedback-100-ls7", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+    const body = result(response.structuredContent);
+    assert.equal(body.code, "THEME_NOT_VERIFIED", JSON.stringify(body));
+    const details = (body.details ?? {}) as Record<string, unknown>;
+    assert.equal(details.written, true);
+    assert.match(String(details.recovery), /limesurvey_get_survey_properties/);
+    assert.deepEqual(current.methods(), ["set_survey_properties", "get_survey_properties"]);
+  } finally {
+    await current.close();
+  }
+});
+
+test("[THEME-9] assign refuses inherit without an RPC call and points to the admin interface", async () => {
+  const current = await session({ responder: surveyTemplateResponder() });
+  try {
+    const response = await current.client.callTool({
+      name: "limesurvey_assign_survey_theme",
+      arguments: { survey_id: 123, theme_name: "inherit", confirm_theme_assignment: true },
+    });
+    assert.equal(response.isError, true, JSON.stringify(response.structuredContent));
+    const text = JSON.stringify(response.content);
+    assert.match(text, /inherit/);
+    assert.match(text, /admin/i);
+    assert.equal(current.requests.length, 0);
   } finally {
     await current.close();
   }
@@ -368,6 +447,82 @@ test("[THEME-9] validate rejects a ZIP name whose installed theme name exceeds 4
   assert.equal(validation.valid, false);
   assert.ok(validation.errors.some((error) => error.includes("45")), JSON.stringify(validation.errors));
   assert.equal(validation.installed_theme_name, installedName);
+});
+
+test("[THEME-9] validate accepts a vanilla-like theme that only breaks the generator's policy, with policy warnings", async () => {
+  // Own CSS file instead of css/mcp-theme.css, no LICENSE.txt and no license in the manifest, 60 entries, and an
+  // @import of an external font stylesheet: LimeSurvey imports and uses all of it.
+  const zip = new JSZip();
+  zip.file(
+    "config.xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <metadata>
+    <name>vanilla_like-100-ls7</name>
+    <title>Vanilla-like Theme</title>
+    <type>theme</type>
+    <author>Test Author</author>
+    <version>1.0.0</version>
+    <apiVersion>3</apiVersion>
+    <description>Hand-built theme outside the generator's policy.</description>
+    <extends>vanilla</extends>
+  </metadata>
+  <compatibility>
+    <version>7.0</version>
+  </compatibility>
+  <files>
+    <css>
+      <add>css/custom.css</add>
+    </css>
+  </files>
+</config>
+`,
+  );
+  zip.file(
+    "css/custom.css",
+    "@import url(\"https://fonts.example.test/inter.css\");\nbody { font-family: Inter, sans-serif; }\n",
+  );
+  for (let index = 1; index <= 54; index += 1) {
+    zip.file(`views/subviews/custom/part_${String(index).padStart(2, "0")}.twig`, `{# part ${index} #}\n`);
+  }
+  // 56 files plus the folders css/, views/, views/subviews/ and views/subviews/custom/.
+  assert.equal(Object.keys(zip.files).length, 60);
+
+  const validation = await validate("vanilla_like-1.0.0-ls7.zip", zip);
+  assert.deepEqual(validation.errors, []);
+  assert.equal(validation.valid, true);
+  const policy = validation.warnings.filter((warning) => warning.startsWith("policy:"));
+  const has = (check: (warning: string) => boolean, label: string) =>
+    assert.ok(policy.some(check), `${label}: ${JSON.stringify(validation.warnings)}`);
+  has((warning) => warning.includes("css/mcp-theme.css"), "missing css/mcp-theme.css");
+  has((warning) => warning.includes("LICENSE.txt"), "missing LICENSE.txt");
+  has((warning) => /GPL|General Public License/i.test(warning), "missing GPL license");
+  has((warning) => /\b50\b/.test(warning) && /entries/i.test(warning), "more than 50 entries");
+  has((warning) => warning.includes("css/custom.css") && /@import|external|url/i.test(warning), "external @import");
+});
+
+test("[THEME-9] validate reports missing small-screen rules as a policy warning", async () => {
+  const validation = await validate(
+    "no_breakpoint-1.0.0-ls7.zip",
+    themePackage("no_breakpoint-100-ls7", {
+      css: ":focus-visible { outline: 3px solid #005FCC; }\n"
+        + "@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }\n",
+    }),
+  );
+  assert.deepEqual(validation.errors, []);
+  assert.equal(validation.valid, true);
+  assert.ok(
+    validation.warnings.some((warning) => warning.startsWith("policy:") && /small-screen|575/i.test(warning)),
+    JSON.stringify(validation.warnings),
+  );
+});
+
+test("[THEME-9] validate keeps an archive path that leaves the theme folder an error", async () => {
+  const zip = themePackage("evil_path-100-ls7");
+  zip.file("../evil.css", "body { color: red; }\n", { createFolders: false });
+  const validation = await validate("evil_path-1.0.0-ls7.zip", zip);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => error.includes("../evil.css")), JSON.stringify(validation.errors));
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
