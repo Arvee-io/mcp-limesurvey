@@ -91,8 +91,10 @@ test("[GEN-A] add_question_from_spec is registered with the annotations and the 
     assert.equal(tool.annotations?.idempotentHint, false);
     assert.equal(tool.annotations?.openWorldHint, true);
     assert.ok(tool.outputSchema, "the tool has an output schema");
-    assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ["group_id", "position", "question", "survey_id"]);
+    assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}).sort(), ["acknowledge", "group_id", "position", "question", "survey_id"]);
     assert.deepEqual([...(tool.inputSchema.required ?? [])].sort(), ["group_id", "question", "survey_id"]);
+    // Review of PR4: filling translation gaps of the survey needs acknowledge: ["fill_translation_gaps"].
+    assert.match(JSON.stringify(tool.inputSchema.properties?.acknowledge ?? null), /fill_translation_gaps/);
     assert.deepEqual(propertyNames(tool.inputSchema).filter((name) => /path|file/i.test(name)), [], "the tool takes no file parameter");
   });
 });
@@ -406,6 +408,8 @@ test("[GEN-A] a translation gap elsewhere in the survey is reported as side effe
     survey_id: sid,
     group_id: gid(0),
     question: { code: "N1", type: "S", text: both("Neu", "New") },
+    // Review of PR4: filling the gap needs the confirmation (without it: TRANSLATION_GAPS).
+    acknowledge: ["fill_translation_gaps"],
   }), { fake });
   assert.equal(result.verification?.ok, true, JSON.stringify(result.verification));
   const sideEffects = (result.side_effects as Array<{ kind?: unknown }> | undefined) ?? [];

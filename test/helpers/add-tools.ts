@@ -90,6 +90,36 @@ export function captureResults(fake: FakeLimeSurvey, method: string): unknown[] 
   return results;
 }
 
+/** What the caller sees instead of the real answer: another result, a JSON-RPC error, an HTTP status or a lost connection. */
+export type Outcome =
+  | { kind: "result"; result: unknown }
+  | { kind: "rpc_error"; message: string }
+  | { kind: "http"; status: number }
+  | { kind: "transport" };
+
+/**
+ * The first call of `method` really runs in the fake (an import creates its element), but the caller gets `outcome`
+ * instead of the answer: LimeSurvey did the work, the answer says something else or never arrives. Replaces the fetch
+ * of the fake, so call it before the session that sends the method is opened.
+ */
+export function outcomeAfterRun(fake: FakeLimeSurvey, method: string, outcome: Outcome): void {
+  const target = fake as unknown as { fetch: typeof fetch };
+  const original = target.fetch;
+  let used = false;
+  target.fetch = async (input, init) => {
+    const response = await original(input, init);
+    const body = JSON.parse(String(init?.body)) as { method?: unknown; id?: unknown };
+    if (used || body.method !== method) return response;
+    used = true;
+    if (outcome.kind === "transport") throw new TypeError("fetch failed");
+    if (outcome.kind === "http") return new Response("Internal Server Error", { status: outcome.status });
+    const payload = outcome.kind === "result"
+      ? { id: body.id, result: outcome.result, error: null }
+      : { id: body.id, result: null, error: outcome.message };
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
+  };
+}
+
 /** A LimeSurvey structure file (.lsq, .lsg) taken apart: document type, languages and the rows of every section. */
 export interface StructureFile {
   docType: string;
