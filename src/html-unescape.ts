@@ -46,18 +46,30 @@ export function unescapeHtml(text: string): string {
 }
 
 /**
- * Like unescapeHtml, but only a reference that ends with ";" and is a numeric reference or an exact HTML5 name is
- * decoded, and only when the result has none of & < > " '. Everything else stays as written, so decoded markup never
- * appears, URLs like ?a=1&copy=2 stay intact and a second pass changes nothing.
+ * One pass of the safe decoding: a reference is decoded only when it ends with ";", is a numeric reference or an exact
+ * HTML5 name, and its result is not empty and has none of & < > " '. Everything else stays as written.
  */
-export function unescapeHtmlSafe(text: string): string {
-  if (!text.includes("&")) return text;
+function decodeSafeOnce(text: string): string {
   return text.replace(CHARREF, (match, reference: string) => {
     if (!reference.endsWith(";")) return match;
-    let decoded: string | undefined;
-    if (reference.startsWith("#")) decoded = decodeNumeric(reference);
-    else decoded = namedReference(reference);
-    if (decoded === undefined || MARKUP_CHARACTERS.test(decoded)) return match;
+    const decoded = reference.startsWith("#") ? decodeNumeric(reference) : namedReference(reference);
+    if (decoded === undefined || decoded === "" || MARKUP_CHARACTERS.test(decoded)) return match;
     return decoded;
   });
+}
+
+/**
+ * Like unescapeHtml, but decodes only what decodeSafeOnce accepts, so decoded markup never appears, a reference to a
+ * dropped code point stays visible and URLs like ?a=1&copy=2 stay intact. A decoded character can build a new reference
+ * with its neighbours ("&&#97;uml;" becomes "&auml;"), so the pass is repeated until nothing changes: the result is a
+ * fixed point and a second call changes nothing. It ends because every decoded reference is longer than its result.
+ */
+export function unescapeHtmlSafe(text: string): string {
+  let current = text;
+  while (current.includes("&")) {
+    const next = decodeSafeOnce(current);
+    if (next === current) break;
+    current = next;
+  }
+  return current;
 }

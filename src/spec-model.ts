@@ -31,6 +31,24 @@ export const SHOWQNUMCODE_VALUES = ["B", "N", "C", "X", "I"] as const;
 export const EXPIRES_DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 export const EXPIRES_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Question attribute names LimeSurvey stores: a letter first, then letters, digits or underscores, at most 50. */
+export const ATTRIBUTE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,49}$/;
+/** survey.format: G group by group, S question by question, A all in one page. */
+export const SURVEY_FORMATS = ["G", "A", "S"] as const;
+
+/**
+ * Whether survey.expires is usable: "ok", "format" (neither YYYY-MM-DD nor YYYY-MM-DD HH:MM:SS) or "calendar" (the
+ * format fits, but there is no such date or time: month 13, 30 February, 29 February of a common year, minute 61).
+ */
+export function checkExpires(value: string): "ok" | "format" | "calendar" {
+  if (!EXPIRES_DATETIME_PATTERN.test(value) && !EXPIRES_DATE_PATTERN.test(value)) return "format";
+  const [year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0] = value.split(/[- :]/).map(Number);
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  const real = month >= 1 && month <= 12 && day >= 1 && day <= (daysInMonth ?? 0) && hour <= 23 && minute <= 59 && second <= 59;
+  return real ? "ok" : "calendar";
+}
+
 /** Keys of the three levels, in the order the spec documents them. */
 export const SURVEY_KEYS = [
   "title", "language", "additional_languages", "description", "welcometext", "endtext", "anonymized", "datestamp",

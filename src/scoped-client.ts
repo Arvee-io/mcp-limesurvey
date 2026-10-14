@@ -30,19 +30,31 @@ const CONTENT_WRITE_METHODS: ReadonlySet<string> = new Set([
   "set_question_properties",
 ]);
 
-function isAllowed(level: ClientLevel, method: string, params: JsonValue[]): boolean {
+/** What a tool call may narrow further than its level. */
+export interface ScopeOptions {
+  /**
+   * The only write methods this call may send (reads always pass). An empty list allows no write. The list only narrows:
+   * a method the level does not allow stays refused, and so does a .lsa import.
+   */
+  writeMethods?: readonly string[];
+}
+
+function isAllowed(level: ClientLevel, method: string, params: JsonValue[], writes: ReadonlySet<string>): boolean {
   if (READ_METHOD.test(method)) return true;
-  if (level === "none" || !CONTENT_WRITE_METHODS.has(method)) return false;
+  if (level === "none" || !writes.has(method)) return false;
   // A .lsa archive activates the survey and imports participants and responses.
   if (method === "import_survey" && String(params[1]).trim().toLowerCase() === "lsa") return false;
   return true;
 }
 
 /** A client that refuses every method outside the level, so a tool cannot do more than its write scope grants. */
-export function scopedClient(client: RpcClient, level: ClientLevel): RpcClient {
+export function scopedClient(client: RpcClient, level: ClientLevel, options: ScopeOptions = {}): RpcClient {
+  const writes: ReadonlySet<string> = options.writeMethods === undefined
+    ? CONTENT_WRITE_METHODS
+    : new Set(options.writeMethods.filter((method) => CONTENT_WRITE_METHODS.has(method)));
   return {
     async call(method, params = []) {
-      if (!isAllowed(level, method, params)) {
+      if (!isAllowed(level, method, params, writes)) {
         throw new LimeSurveyError(
           `The RemoteControl method ${method} is not available to this tool at the level "${level}".`,
           "METHOD_NOT_ALLOWED",

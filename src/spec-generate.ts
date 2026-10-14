@@ -3,8 +3,9 @@
  * plugin's Python generator (scripts/lss_tools.py), byte for byte for valid specs. Every value goes into a CDATA
  * section; the only text outside CDATA (the language codes) is XML-escaped.
  */
+import { capLists, structuredSize } from "./response-limit.js";
 import { normalizeSurveySpec, unescapeStrings } from "./spec-model.js";
-import { validateSpec } from "./spec-validate.js";
+import { validateSpec, type SpecFinding } from "./spec-validate.js";
 import { LimeSurveyError, type JsonValue } from "./types.js";
 
 const DBVERSION = "617";
@@ -59,20 +60,29 @@ class Writer {
 const yn = (flag: boolean): string => (flag ? "Y" : "N");
 const mandatoryFlag = (value: boolean | "soft"): string => (value === "soft" ? "S" : yn(value));
 
+/**
+ * The SPEC_INVALID error: details.errors holds the problems (path, message, fix), errors_total their number. With
+ * `limit` the list is cut so that the structured answer of that workflow stays within maxChars (truncated says so).
+ */
+export function specInvalidError(errors: readonly SpecFinding[], limit?: { workflow: string; maxChars: number }): LimeSurveyError {
+  const message = `The spec is invalid (${errors.length} problem${errors.length === 1 ? "" : "s"}); no file was generated.`;
+  const details = (shown: readonly SpecFinding[]): JsonValue => ({
+    errors: shown as unknown as JsonValue,
+    errors_total: errors.length,
+    truncated: shown.length < errors.length,
+    recovery: "Fix every entry of errors (path, message, fix) and send the spec again; limesurvey_validate_spec checks a spec without sending anything to LimeSurvey.",
+  });
+  const shown = limit === undefined
+    ? errors
+    : capLists({ errors }, (cut) => structuredSize(limit.workflow, { status: "error", message, code: "SPEC_INVALID", details: details(cut.errors) }) <= limit.maxChars).errors;
+  return new LimeSurveyError(message, "SPEC_INVALID", details(shown));
+}
+
 /** Validates the spec and returns the .lss document. Throws LimeSurveyError SPEC_INVALID with the errors. */
 export function generateSurveyLss(spec: unknown): string {
   const decoded = unescapeStrings(spec);
   const validation = validateSpec("survey", decoded);
-  if (!validation.valid) {
-    throw new LimeSurveyError(
-      `The spec is invalid (${validation.errors.length} problem${validation.errors.length === 1 ? "" : "s"}); no file was generated.`,
-      "SPEC_INVALID",
-      {
-        errors: validation.errors,
-        recovery: "Fix every entry of errors (path, message, fix) and send the spec again; limesurvey_validate_spec checks a spec without sending anything to LimeSurvey.",
-      } as JsonValue,
-    );
-  }
+  if (!validation.valid) throw specInvalidError(validation.errors);
   const sid = DEFAULT_SID;
   const norm = normalizeSurveySpec(decoded);
   const survey = norm.survey;

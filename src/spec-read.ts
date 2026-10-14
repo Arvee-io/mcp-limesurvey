@@ -36,13 +36,26 @@ export interface MissingTranslation {
   language: string;
 }
 
+/** A value that exists but could not be read in this language, with the reason. */
+export interface UnreadableItem {
+  path: string;
+  language: string;
+  reason: string;
+}
+
 export interface SpecRead {
   languages: string[];
   active: boolean;
   /** Comparable form; a language a text lacks is missing from its map and listed in missing_translations. */
   spec: ComparableSpec;
+  /** Texts that have no row in a language (the question text itself, not what hangs on it). */
   missing_translations: MissingTranslation[];
+  /** Answer texts and language-dependent attributes that cannot be read because the question has no text row in the language. */
+  unreadable: UnreadableItem[];
 }
+
+const NO_TEXT_ROW_ANSWERS = "The question has no text row in this language, so get_question_properties fails for it and its answer options cannot be read.";
+const NO_TEXT_ROW_ATTRIBUTES = "The question has no text row in this language, so get_question_properties fails for it and its language-dependent attributes cannot be read.";
 
 type Row = Record<string, JsonValue>;
 
@@ -158,6 +171,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
   const base = str(properties.language) || "de";
   const languages = [base, ...splitLanguages(properties.additional_languages).filter((language) => language !== base)];
   const missing: MissingTranslation[] = [];
+  const unreadable: UnreadableItem[] = [];
 
   // Survey texts.
   const surveyTexts = { title: {} as TextMap, description: {} as TextMap, welcometext: {} as TextMap, endtext: {} as TextMap };
@@ -215,7 +229,10 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
     const questions = questionRows.map((row, questionIndex) => {
       const qid = str(row.qid);
       const questionPath = `groups[${groupIndex}].questions[${questionIndex}]`;
-      const baseProps = propertiesOf.get(`${qid}|${base}`);
+      const propsIn = (language: string): Row | undefined => propertiesOf.get(`${qid}|${language}`);
+      // Columns, attributes and the answer codes do not depend on the language: the base language gives them, any
+      // readable language will do when the base language has no text row for this question.
+      const baseProps = propsIn(base) ?? languages.map(propsIn).find((props) => props !== undefined);
       const column = (name: string): JsonValue | undefined => baseProps?.[name] ?? row[name];
       const type = str(column("type"));
 
@@ -237,8 +254,17 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
       for (const [name, value] of Object.entries(asRow(baseProps?.attributes) ?? {})) {
         if (!I18N_ATTRIBUTES.has(name)) attributes[name] = attributeValue(value);
       }
+      const hasLanguageAttributes = languages.some((language) => (
+        Object.keys(asRow(propsIn(language)?.attributes_lang) ?? {}).some((name) => I18N_ATTRIBUTES.has(name))
+      ));
       for (const language of languages) {
-        for (const [name, value] of Object.entries(asRow(propertiesOf.get(`${qid}|${language}`)?.attributes_lang) ?? {})) {
+        const props = propsIn(language);
+        if (props === undefined) {
+          // Only worth a note when another language of this question has such attributes.
+          if (hasLanguageAttributes) unreadable.push({ path: `${questionPath}.attributes`, language, reason: NO_TEXT_ROW_ATTRIBUTES });
+          continue;
+        }
+        for (const [name, value] of Object.entries(asRow(props.attributes_lang) ?? {})) {
           if (!I18N_ATTRIBUTES.has(name)) continue;
           const perLanguage = (attributes[name] ??= {}) as TextMap;
           perLanguage[language] = attributeValue(value);
@@ -282,14 +308,17 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
         const multiscale = type === "1";
         const baseOptions = parseOptions(baseProps?.answeroptions, multiscale);
         const optionsByLanguage = languages.map((language) => new Map(
-          parseOptions(propertiesOf.get(`${qid}|${language}`)?.answeroptions, multiscale).map((option) => [`${option.scale_id}:${option.code}`, option] as const),
+          parseOptions(propsIn(language)?.answeroptions, multiscale).map((option) => [`${option.scale_id}:${option.code}`, option] as const),
         ));
         answers = baseOptions.map((option, index) => {
           const answerText: TextMap = {};
           languages.forEach((language, languageIndex) => {
             const found = optionsByLanguage[languageIndex]?.get(`${option.scale_id}:${option.code}`);
             if (!found) {
-              missing.push({ path: `${questionPath}.answers[${index}].text`, language });
+              const path = `${questionPath}.answers[${index}].text`;
+              // Without a text row the answers cannot be read at all: that is not a missing answer translation.
+              if (propsIn(language) === undefined) unreadable.push({ path, language, reason: NO_TEXT_ROW_ANSWERS });
+              else missing.push({ path, language });
               return;
             }
             answerText[language] = found.answer;
@@ -344,6 +373,7 @@ export async function readSurveySpec(client: RpcClient, surveyId: number): Promi
     active: properties.active === "Y",
     spec: normalizeSpec({ survey, groups }, languages),
     missing_translations: missing,
+    unreadable,
   };
 }
 

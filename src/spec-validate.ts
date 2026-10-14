@@ -6,8 +6,7 @@
 import {
   ANSWER_CODE_PATTERN,
   ANSWER_KEYS,
-  EXPIRES_DATETIME_PATTERN,
-  EXPIRES_DATE_PATTERN,
+  ATTRIBUTE_NAME_PATTERN,
   GROUP_KEYS,
   LANGUAGE_CODE_PATTERN,
   MAX_QUESTION_CODE_LENGTH,
@@ -23,9 +22,12 @@ import {
   SUBQUESTION_KEYS,
   SUPPORTED_TYPES,
   SURVEY_BOOLEAN_KEYS,
+  SURVEY_DEFAULTS,
+  SURVEY_FORMATS,
   SURVEY_KEYS,
   SURVEY_TEXT_KEYS,
   TWO_SCALE_TYPES,
+  checkExpires,
   isRecord,
   unescapeStrings,
   type SpecKind,
@@ -50,7 +52,8 @@ export interface SpecValidation {
   summary: SpecSummary;
 }
 
-const XML_FORBIDDEN_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/u;
+/** Characters XML 1.0 cannot store: control characters, the non-characters U+FFFE and U+FFFF and unpaired surrogates. */
+const XML_FORBIDDEN_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF￾￿]/u;
 const DATA_URI_SOURCE = /src\s*=\s*["']?\s*data:/i;
 const TEXT_FIX = "Give one string; it is used for every language of the survey.";
 
@@ -182,7 +185,27 @@ function validateSurveyObject(findings: Findings, survey: unknown, path: string)
     if (!Array.isArray(additional)) {
       findings.error(keyPath(path, "additional_languages"), "additional_languages must be a list of language codes.", 'Use a list such as ["en"].');
     } else {
-      additional.forEach((language, index) => checkLanguage(findings, indexPath(keyPath(path, "additional_languages"), index), language));
+      // A language may appear once and not as the base language (case is ignored, like LimeSurvey does).
+      const base = survey.language === undefined ? SURVEY_DEFAULTS.language : survey.language;
+      const baseKey = typeof base === "string" && LANGUAGE_CODE_PATTERN.test(base) ? base.toLowerCase() : undefined;
+      const seen = new Map<string, string>();
+      additional.forEach((language, index) => {
+        const languagePath = indexPath(keyPath(path, "additional_languages"), index);
+        checkLanguage(findings, languagePath, language);
+        if (typeof language !== "string" || !LANGUAGE_CODE_PATTERN.test(language)) return;
+        const key = language.toLowerCase();
+        if (key === baseKey) {
+          findings.error(
+            languagePath,
+            `The language ${language} is the base language of the survey (survey.language, default ${SURVEY_DEFAULTS.language}).`,
+            "Remove it from additional_languages; the base language is always part of the survey.",
+          );
+        } else if (seen.has(key)) {
+          findings.error(languagePath, `The language ${language} is listed twice (first at ${seen.get(key)}; case is ignored).`, "List every additional language once.");
+        } else {
+          seen.set(key, languagePath);
+        }
+      });
     }
   }
   for (const name of SURVEY_BOOLEAN_KEYS) checkBoolean(findings, keyPath(path, name), survey[name]);
@@ -191,14 +214,30 @@ function validateSurveyObject(findings: Findings, survey: unknown, path: string)
       findings.error(keyPath(path, name), `Must be a string, got ${describeValue(survey[name])}.`, "Use a string.");
     }
   }
-  const expires = survey.expires;
-  if (expires !== undefined && expires !== null && expires !== ""
-    && !(typeof expires === "string" && (EXPIRES_DATETIME_PATTERN.test(expires) || EXPIRES_DATE_PATTERN.test(expires)))) {
+  const format = survey.format;
+  if (typeof format === "string" && !(SURVEY_FORMATS as readonly string[]).includes(format)) {
     findings.error(
-      keyPath(path, "expires"),
-      `expires ${JSON.stringify(expires)} has an unsupported format.`,
-      "Use YYYY-MM-DD HH:MM:SS or YYYY-MM-DD (end of that day), or leave expires out.",
+      keyPath(path, "format"),
+      `format ${JSON.stringify(format)} is not allowed.`,
+      "Use G (group by group), S (question by question) or A (all in one page), or leave format out for G.",
     );
+  }
+  const expires = survey.expires;
+  if (expires !== undefined && expires !== null && expires !== "") {
+    const check = typeof expires === "string" ? checkExpires(expires) : "format";
+    if (check === "format") {
+      findings.error(
+        keyPath(path, "expires"),
+        `expires ${JSON.stringify(expires)} has an unsupported format.`,
+        "Use YYYY-MM-DD HH:MM:SS or YYYY-MM-DD (end of that day), or leave expires out.",
+      );
+    } else if (check === "calendar") {
+      findings.error(
+        keyPath(path, "expires"),
+        `expires ${JSON.stringify(expires)} is not a real date or time.`,
+        "Use a date that exists (mind the month length and leap years) and a time from 00:00:00 to 23:59:59, or leave expires out.",
+      );
+    }
   }
   const showqnumcode = survey.showqnumcode;
   if (showqnumcode !== undefined && (typeof showqnumcode !== "string" || !(SHOWQNUMCODE_VALUES as readonly string[]).includes(showqnumcode))) {
@@ -281,6 +320,13 @@ function validateAttributes(findings: Findings, path: string, attributes: unknow
   }
   for (const [name, value] of Object.entries(attributes)) {
     const attributePath = keyPath(path, name);
+    if (!ATTRIBUTE_NAME_PATTERN.test(name)) {
+      findings.error(
+        attributePath,
+        `The attribute name ${JSON.stringify(name)} is invalid.`,
+        "Use 1-50 characters: a letter first, then letters, digits or underscores (for example display_columns).",
+      );
+    }
     if (isRecord(value)) {
       findings.error(attributePath, "A value per language (a language map) is not supported yet.", "Give one string or number.");
     } else if (!(typeof value === "string" || (typeof value === "number" && Number.isFinite(value)))) {
@@ -413,12 +459,12 @@ function validateGroup(findings: Findings, group: unknown, path: string, scope: 
 /** Every string of the spec: XML 1.0 control characters and embedded data URIs. */
 function checkStrings(findings: Findings, value: unknown, path: string): void {
   if (typeof value === "string") {
-    const control = XML_FORBIDDEN_CONTROL.exec(value);
-    if (control) {
-      const hex = (control[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0");
+    const forbidden = XML_FORBIDDEN_CHARACTER.exec(value);
+    if (forbidden) {
+      const hex = (forbidden[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0");
       findings.error(
         path,
-        `The text contains the control character U+${hex}, which XML 1.0 cannot store.`,
+        `The text contains the character U+${hex}, which XML 1.0 cannot store (a control character, U+FFFE, U+FFFF or an unpaired surrogate).`,
         "Remove the character (copy the text again without hidden control characters).",
       );
     }
