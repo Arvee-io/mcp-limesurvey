@@ -118,7 +118,7 @@ const generatedExportPaths = [];
 try {
   await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
   const listed = await mcpClient.listTools();
-  if (listed.tools.length !== 75) throw new Error(`Expected 75 tools, received ${listed.tools.length}.`);
+  if (listed.tools.length !== 82) throw new Error(`Expected 82 tools, received ${listed.tools.length}.`);
 
   await invoke(mcpClient, "limesurvey_get_session_key");
   await attempt(mcpClient, "limesurvey_get_available_site_settings");
@@ -205,6 +205,76 @@ try {
 
   await attempt(mcpClient, "limesurvey_add_language", { survey_id: primarySurveyId, language: "de" });
   await attempt(mcpClient, "limesurvey_get_survey_languages", { survey_id: primarySurveyId });
+
+  // Survey descriptions (spec tools): validate, create, read, insert, change, change texts.
+  const specSurvey = {
+    survey: { title: `${prefix} Spec`, language: "en", additional_languages: ["de"] },
+    groups: [{
+      title: { en: "Group", de: "Gruppe" },
+      questions: [
+        { code: "S1", type: "L", text: { en: "Question", de: "Frage" },
+          answers: [{ code: "A1", text: { en: "Yes", de: "Ja" } }, { code: "A2", text: { en: "No", de: "Nein" } }] },
+        { code: "S2", type: ":", text: { en: "Numbers", de: "Zahlen" },
+          subquestions: [
+            { code: "R1", scale_id: 0, text: { en: "Row", de: "Zeile" } },
+            { code: "C1", scale_id: 1, text: { en: "Column", de: "Spalte" } },
+          ] },
+      ],
+    }],
+  };
+  await attempt(mcpClient, "limesurvey_validate_spec", { spec: specSurvey });
+  const specCreated = await attempt(mcpClient, "limesurvey_create_survey_from_spec", { spec: specSurvey });
+  const specSurveyId = numericId(specCreated, ["survey_id"]);
+  if (specSurveyId) {
+    cleanup.push(() => attempt(mcpClient, "limesurvey_delete_survey", {
+      survey_id: specSurveyId,
+      confirm_destructive_action: true,
+    }));
+    if (specCreated?.verification?.ok !== true) {
+      throw new Error(`limesurvey_create_survey_from_spec verification failed: ${JSON.stringify(specCreated?.verification)}`);
+    }
+    const specRead = await attempt(mcpClient, "limesurvey_get_survey_spec", { survey_id: specSurveyId });
+    const specGroupId = specRead?.ids?.groups?.[0]?.group_id;
+    const specQuestionId = specRead?.ids?.questions?.find((item) => item.code === "S1")?.question_id;
+    await attempt(mcpClient, "limesurvey_add_question_from_spec", {
+      survey_id: specSurveyId,
+      group_id: specGroupId,
+      position: 1,
+      question: { code: "S0", type: "S", text: { en: "Name", de: "Name" } },
+    });
+    await attempt(mcpClient, "limesurvey_add_group_from_spec", {
+      survey_id: specSurveyId,
+      group: { title: { en: "More", de: "Mehr" }, questions: [{ code: "S3", type: "T", text: { en: "Comment", de: "Kommentar" } }] },
+    });
+    const specQuestion = await attempt(mcpClient, "limesurvey_get_survey_spec", { survey_id: specSurveyId, question_id: specQuestionId });
+    if (specQuestion?.spec) {
+      const endState = { ...specQuestion.spec, answers: [...specQuestion.spec.answers, { code: "A3", text: { en: "Maybe", de: "Vielleicht" } }] };
+      const dryRun = await attempt(mcpClient, "limesurvey_update_question_from_spec", {
+        survey_id: specSurveyId,
+        question_id: specQuestionId,
+        question: endState,
+        dry_run: true,
+      });
+      const acknowledge = [...new Set((dryRun?.risks ?? []).filter((risk) => risk.blocking && risk.acknowledgeable).map((risk) => risk.code === "unreadable_texts" ? "fill_translation_gaps" : risk.code))];
+      const updated = await attempt(mcpClient, "limesurvey_update_question_from_spec", {
+        survey_id: specSurveyId,
+        question_id: specQuestionId,
+        question: endState,
+        dry_run: false,
+        expected_fingerprint: dryRun?.fingerprint,
+        acknowledge,
+        confirm_destructive_action: true,
+      });
+      if (updated && updated.verification?.ok !== true) {
+        throw new Error(`limesurvey_update_question_from_spec verification failed: ${JSON.stringify(updated.verification)}`);
+      }
+    }
+    await attempt(mcpClient, "limesurvey_update_survey_texts", {
+      survey_id: specSurveyId,
+      texts: { survey: { welcometext: { de: "Willkommen" } }, questions: [{ code: "S2", subquestions: [{ code: "C1", scale_id: 1, text: { de: "Spalte (neu)" } }] }] },
+    });
+  }
+
   await attempt(mcpClient, "limesurvey_get_language_properties", {
     survey_id: primarySurveyId,
     properties: ["surveyls_title", "surveyls_description", "attachments"],
@@ -608,7 +678,7 @@ try {
     await attempt(mcpClient, "limesurvey_get_theme_publication_guide", {
       theme_name: `mcp_live_${stamp}`,
       package_file_name: generated.file_name,
-      installed_limesurvey_version: "7.0.5",
+      installed_limesurvey_version: "7.5.1",
       hosting: "self_hosted",
       publication_scope: "instance",
     });
@@ -645,7 +715,7 @@ try {
   await server.close().catch(() => {});
 }
 
-const allTools = 75;
+const allTools = 82;
 const failed = results.filter((item) => item.status === "failed");
 const passed = results.filter((item) => item.status === "passed" || item.status === "expected_error");
 console.log(JSON.stringify({

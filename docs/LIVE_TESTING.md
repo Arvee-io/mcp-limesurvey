@@ -1,6 +1,6 @@
 # Live Integration Testing
 
-The live integration runner exercises all 75 MCP tools against a dedicated
+The live integration runner exercises all 82 MCP tools against a dedicated
 LimeSurvey test instance. It is intentionally separate from `npm test`, which
 uses mocked JSON-RPC responses and is safe for CI.
 
@@ -48,6 +48,13 @@ read-only `limesurvey_validate_participants` and `limesurvey_invite_participants
 with `dry_run=true`, which must not send any mail and must not call the
 RemoteControl method `invite_participants`.
 
+The spec tools are exercised on a separate two-language test survey created by
+`limesurvey_create_survey_from_spec` (with a type `:` question): it is read with
+`limesurvey_get_survey_spec`, a question and a group are inserted, one question
+gets one more answer through `limesurvey_update_question_from_spec` (dry run, then
+the real run with the reported acknowledgements), and texts are changed with
+`limesurvey_update_survey_texts`. The survey is deleted in the cleanup.
+
 `limesurvey_replace_question` is exercised on the inactive test survey: it
 replaces the imported test question with the same `.lsq` fixture (the new
 question must keep the code and the position of the old one, and the old
@@ -84,7 +91,7 @@ npm run test:live
 
 Success requires:
 
-- `unique_tools_exercised` equals `75`;
+- `unique_tools_exercised` equals `82`;
 - `failed` equals `0`;
 - `untested_tools` equals `0`.
 
