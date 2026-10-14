@@ -31,7 +31,9 @@ import {
   SURVEY_KEYS,
   SURVEY_TEXT_KEYS,
   THEME_NAME_PATTERN,
+  TWO_ANSWER_SCALES,
   TWO_SCALE_TYPES,
+  TWO_SUBQUESTION_SCALES,
   checkExpires,
   isKnownLanguageIndependent,
   isRecord,
@@ -410,8 +412,48 @@ function validateSurveyObject(findings: Findings, survey: unknown, path: string,
   }
 }
 
+/**
+ * scale_id of a subquestion or answer: 0 or 1. Scale 1 exists only for the subquestions of : and ; (the columns) and the
+ * answers of 1 (the second answer scale); scale 0, the scale of every other item, may always be given. Returns the scale
+ * the code is unique in (LimeSurvey: subquestion codes per parent and scale, Question.php:203-217 and 286-297; answer codes
+ * per question and scale, Answer.php:76-100 and 126-129).
+ */
+function checkScale(findings: Findings, itemPath: string, value: unknown, type: string, list: "subquestions" | "answers"): string {
+  if (value === undefined) return "0";
+  const scalePath = keyPath(itemPath, "scale_id");
+  if (value !== 0 && value !== 1) {
+    findings.error(
+      scalePath,
+      `scale_id must be 0 or 1, got ${typeof value === "number" ? String(value) : describeValue(value)}.`,
+      "Use 0 (the first scale) or 1 (the second scale: the columns of the types : and ;, the second answer scale of type 1), or leave scale_id out for scale 0.",
+    );
+    return JSON.stringify(value) ?? "?";
+  }
+  if (value === 1 && SUPPORTED_TYPES.has(type)) {
+    if (list === "subquestions" && !TWO_SUBQUESTION_SCALES.has(type)) {
+      findings.error(
+        scalePath,
+        `Type ${type} has one subquestion scale, so a subquestion cannot be on scale 1; only the types : and ; have a second subquestion scale (the columns).`,
+        type === "1"
+          ? "Remove scale_id: the subquestions of type 1 are its rows on scale 0; its second scale is an answer scale (answers[].scale_id)."
+          : "Remove scale_id, or use the type : or ; for an array with rows and columns.",
+      );
+    } else if (list === "answers" && !TWO_ANSWER_SCALES.has(type)) {
+      findings.error(
+        scalePath,
+        `Type ${type} has ${TWO_SUBQUESTION_SCALES.has(type) ? "no answers" : "one answer scale"}, so an answer cannot be on scale 1; only type 1 has a second answer scale.`,
+        TWO_SUBQUESTION_SCALES.has(type)
+          ? "Make the columns subquestions with scale_id 1 and remove answers."
+          : "Remove scale_id, or use type 1 for two answer scales.",
+      );
+    }
+  }
+  return String(value);
+}
+
 function validateAnswers(findings: Findings, path: string, answers: unknown[], question: Record<string, unknown>, scope: Scope): void {
   const seen = new Set<string>();
+  const type = typeof question.type === "string" ? question.type : "";
   answers.forEach((answer, index) => {
     const answerPath = indexPath(path, index);
     scope.counters.answers += 1;
@@ -420,6 +462,8 @@ function validateAnswers(findings: Findings, path: string, answers: unknown[], q
       return;
     }
     checkKeys(findings, answerPath, answer, ANSWER_KEYS, "an answer");
+    const scale = checkScale(findings, answerPath, answer.scale_id, type, "answers");
+    const twoScales = TWO_ANSWER_SCALES.has(type);
     // LimeSurvey 7 stores the entries of a Ranking question as subquestions: a code of up to 20 characters and a
     // relevance. LimeSurvey 6 keeps answers (up to 5 characters, no relevance). Without the version both are allowed
     // and reported as a warning.
@@ -433,10 +477,16 @@ function validateAnswers(findings: Findings, path: string, answers: unknown[], q
         `The answer code ${JSON.stringify(code)} is invalid (${longCodes ? "1-20 letters or digits" : "1-5 letters or digits"}).`,
         `Use ${longCodes ? "1-20" : "1-5"} letters or digits, for example A1 or 3.`,
       );
-    } else if (seen.has(code.toLowerCase())) {
-      findings.error(codePath, `The answer code ${code} is used twice in this question.`, "Give every answer a different code (case is ignored).");
+    } else if (seen.has(`${scale}:${code.toLowerCase()}`)) {
+      findings.error(
+        codePath,
+        `The answer code ${code} is used twice ${twoScales ? `on scale ${scale} of` : "in"} this question.`,
+        twoScales
+          ? "Give every answer of a scale a different code (case is ignored); the same code may stand once on each scale."
+          : "Give every answer a different code (case is ignored).",
+      );
     } else {
-      seen.add(code.toLowerCase());
+      seen.add(`${scale}:${code.toLowerCase()}`);
       if (longCodes && scope.generation === undefined && code.length > ANSWER_CODE_MAX_LENGTH) {
         findings.warning(
           codePath,
@@ -495,6 +545,8 @@ function checkDefault(findings: Findings, path: string, value: unknown, scope: S
 
 function validateSubquestions(findings: Findings, path: string, subquestions: unknown[], question: Record<string, unknown>, scope: Scope): void {
   const seen = new Set<string>();
+  const type = typeof question.type === "string" ? question.type : "";
+  const twoScales = TWO_SUBQUESTION_SCALES.has(type);
   subquestions.forEach((item, index) => {
     const itemPath = indexPath(path, index);
     scope.counters.subquestions += 1;
@@ -503,26 +555,43 @@ function validateSubquestions(findings: Findings, path: string, subquestions: un
       return;
     }
     checkKeys(findings, itemPath, item, SUBQUESTION_KEYS, "a subquestion");
+    const scale = checkScale(findings, itemPath, item.scale_id, type, "subquestions");
     const code = item.code;
     const codePath = keyPath(itemPath, "code");
     if (typeof code !== "string" || !SUBQUESTION_CODE_PATTERN.test(code)) {
       findings.error(codePath, `The subquestion code ${JSON.stringify(code)} is invalid (1-20 letters or digits).`, "Use 1-20 letters or digits, for example SQ001.");
     } else if (code.toLowerCase() === "time") {
       findings.error(codePath, 'The subquestion code "time" is reserved by LimeSurvey.', "Use another code, for example SQ001.");
-    } else if (seen.has(code.toLowerCase())) {
-      findings.error(codePath, `The subquestion code ${code} is used twice in this question.`, "Give every subquestion a different code (case is ignored).");
+    } else if (seen.has(`${scale}:${code.toLowerCase()}`)) {
+      findings.error(
+        codePath,
+        `The subquestion code ${code} is used twice ${twoScales ? `on scale ${scale} of` : "in"} this question.`,
+        twoScales
+          ? "Give every subquestion of a scale a different code (case is ignored); the same code may stand once on each scale (a row and a column)."
+          : "Give every subquestion a different code (case is ignored).",
+      );
     } else if (question.other === true && code.toLowerCase() === "other") {
       findings.error(codePath, 'With other=true the code "other" belongs to the "Other" option.', "Use another code or set other to false.");
     } else if (question.type === "P" && code.toLowerCase().endsWith("comment")) {
       findings.error(codePath, 'In a P question a code ending in "comment" collides with the comment field of another option.', 'Use a code that does not end in "comment".');
     } else {
-      seen.add(code.toLowerCase());
+      seen.add(`${scale}:${code.toLowerCase()}`);
     }
     checkText(findings, keyPath(itemPath, "text"), item.text, scope, { required: true, warnEmpty: true });
     checkPlainString(findings, keyPath(itemPath, "relevance"), item.relevance);
     checkDefault(findings, keyPath(itemPath, "default"), item.default, scope, question.same_default === true);
+    if (item.default !== undefined && TWO_SCALE_TYPES.has(type)) {
+      findings.error(
+        keyPath(itemPath, "default"),
+        `LimeSurvey has no default value for the subquestions of a type ${type} question (the type keeps no default values).`,
+        "Remove default from the subquestion.",
+      );
+    }
   });
 }
+
+/** How many items of a list are on the scale (no scale_id counts as scale 0). */
+const onScale = (items: unknown[], scale: number): number => items.filter((item) => isRecord(item) && (item.scale_id ?? 0) === scale).length;
 
 function validateAttributes(findings: Findings, path: string, attributes: unknown, scope: Scope, question: Record<string, unknown>): void {
   if (attributes === undefined || attributes === null) return;
@@ -649,20 +718,11 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
 
   const type = question.type;
   if (typeof type !== "string" || !SUPPORTED_TYPES.has(type)) {
-    const typePath = keyPath(path, "type");
-    if (typeof type === "string" && TWO_SCALE_TYPES.has(type)) {
-      findings.error(
-        typePath,
-        `The question type "${type}" is not supported yet: it needs a second subquestion or answer scale.`,
-        "Use another question type (for example F for a matrix) or build this question in the LimeSurvey admin.",
-      );
-    } else {
-      findings.error(
-        typePath,
-        `The question type ${JSON.stringify(type)} is unknown.`,
-        `Use one of: ${[...SUPPORTED_TYPES].join(" ")}.`,
-      );
-    }
+    findings.error(
+      keyPath(path, "type"),
+      `The question type ${JSON.stringify(type)} is unknown.`,
+      `Use one of: ${[...SUPPORTED_TYPES].join(" ")}.`,
+    );
     return;
   }
 
@@ -670,7 +730,31 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
   const hasAnswers = answers !== "invalid" && answers.length > 0;
   const subPath = keyPath(path, "subquestions");
   const answerPath = keyPath(path, "answers");
-  if (NEED_BOTH.has(type)) {
+  // The sets each type needs (research-gen-types.md section 4: LimeSurvey checks them only when the admin activates a
+  // survey, activate_helper.php:131-226, never on import or RemoteControl activation, so they are checked here).
+  if (type === "1") {
+    // Rows on scale 0; answers on scale 0 and on scale 1 (activate_helper.php:161-171, 201-226).
+    if (!hasSubquestions) findings.error(subPath, "Type 1 needs subquestions (the rows, on scale 0).", 'Add subquestions: [ { "code": "SQ001", "text": "..." } ].');
+    const answerList = answers === "invalid" ? [] : answers;
+    if (onScale(answerList, 0) === 0) {
+      findings.error(answerPath, "Type 1 needs answers on scale 0 (the first answer scale).", 'Add answers without scale_id (scale 0): { "code": "A1", "text": "..." }.');
+    }
+    if (onScale(answerList, 1) === 0) {
+      findings.error(answerPath, "Type 1 needs answers on scale 1 (the second answer scale).", 'Add answers with scale_id 1: { "code": "A1", "text": "...", "scale_id": 1 }.');
+    }
+  } else if (TWO_SUBQUESTION_SCALES.has(type)) {
+    // Rows on scale 0 and columns on scale 1, no answers (activate_helper.php:161-171; CX(arrays/multiflexi):20-21).
+    const subList = subquestions === "invalid" ? [] : subquestions;
+    if (onScale(subList, 0) === 0) {
+      findings.error(subPath, `Type ${type} needs subquestions on scale 0 (the rows).`, 'Add rows without scale_id (scale 0): { "code": "SQ001", "text": "..." }.');
+    }
+    if (onScale(subList, 1) === 0) {
+      findings.error(subPath, `Type ${type} needs subquestions on scale 1 (the columns).`, 'Add columns with scale_id 1: { "code": "SQ001", "text": "...", "scale_id": 1 }.');
+    }
+    if (hasAnswers) {
+      findings.error(answerPath, `Type ${type} takes no answers; its rows and columns are subquestions (scale_id 0 and 1).`, "Make the columns subquestions with scale_id 1 and remove answers.");
+    }
+  } else if (NEED_BOTH.has(type)) {
     if (!hasSubquestions) findings.error(subPath, `Type ${type} needs subquestions (the rows).`, 'Add subquestions: [ { "code": "SQ001", "text": "..." } ].');
     if (!hasAnswers) findings.error(answerPath, `Type ${type} needs answers (the columns).`, 'Add answers: [ { "code": "A1", "text": "..." } ].');
   } else if (NEED_SUBQUESTIONS.has(type)) {
@@ -696,7 +780,9 @@ function validateQuestion(findings: Findings, question: unknown, path: string, s
   // A default value counts only where LimeSurvey evaluates it: on a question without subquestions, and not on R and |.
   if (question.default !== undefined) {
     const defaultPath = keyPath(path, "default");
-    if (NEED_SUBQUESTIONS.has(type) || NEED_BOTH.has(type)) {
+    if (TWO_SCALE_TYPES.has(type)) {
+      findings.error(defaultPath, `LimeSurvey has no default value for a type ${type} question, neither on the question nor on its subquestions.`, "Remove default.");
+    } else if (NEED_SUBQUESTIONS.has(type) || NEED_BOTH.has(type)) {
       findings.error(
         defaultPath,
         `A type ${type} question keeps its default values per subquestion, so LimeSurvey ignores a default on the question itself.`,

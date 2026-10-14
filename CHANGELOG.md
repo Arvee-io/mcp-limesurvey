@@ -48,6 +48,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   of another question type, are errors before anything is written
   (`ATTRIBUTE_NAMES` and `THEME_TYPES`, generated from LimeSurvey 6.17.11 and
   7.5.1).
+- The question types `1` (array dual scale), `:` (array numbers) and `;` (array
+  texts) in every spec tool, with `scale_id` for the second scale; all 29 core
+  question types are supported.
 - Texts per language: every text field of a spec takes a string or a map per
   language; new structure must cover exactly the survey languages.
   Language-dependent attributes are written once per language.

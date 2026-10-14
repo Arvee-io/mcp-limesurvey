@@ -1,0 +1,37 @@
+{
+  "survey": {
+    "title": {
+      "de": "Kontakte",
+      "en": "Contacts"
+    },
+    "language": "de",
+    "additional_languages": ["en"]
+  },
+  "groups": [
+    {
+      "title": {
+        "de": "Ansprechpartner",
+        "en": "Contact persons"
+      },
+      "questions": [
+        {
+          "code": "K01",
+          "type": ";",
+          "text": {
+            "de": "Wer ist Ihr Ansprechpartner?",
+            "en": "Who is your contact person?"
+          },
+          "subquestions": [
+            { "code": "R1", "text": { "de": "Vertrieb", "en": "Sales" } },
+            { "code": "R2", "text": { "de": "Technik", "en": "Engineering" } },
+            { "code": "C1", "text": { "de": "Name", "en": "Name" }, "scale_id": 1 },
+            { "code": "C2", "text": { "de": "Telefon", "en": "Phone" }, "scale_id": 1 }
+          ],
+          "attributes": {
+            "placeholder": { "de": "bitte eintragen", "en": "please enter" }
+          }
+        }
+      ]
+    }
+  ]
+}

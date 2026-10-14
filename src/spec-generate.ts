@@ -5,11 +5,13 @@
  * attribute values per language, default values (the sections defaultvalues and defaultvalue_l10ns), a script and the
  * question columns of the admin; a spec that uses none of it produces exactly the version 1 file.
  */
+import { BASE_THEME_BY_TYPE } from "./attribute-defaults.js";
 import { capLists, structuredSize } from "./response-limit.js";
 import {
   normalizeGroup,
   normalizeQuestion,
   normalizeSurveySpec,
+  TWO_SCALE_TYPES,
   unescapeStrings,
   type NormalQuestion,
   type TextMap,
@@ -133,6 +135,13 @@ interface QuestionPlace {
   ranking: "answers" | "subquestions";
 }
 
+/** The next place within a scale (from 0), counted per scale. */
+function nextOrder(counters: Map<number, number>, scale: number): number {
+  const order = counters.get(scale) ?? 0;
+  counters.set(scale, order + 1);
+  return order;
+}
+
 /** Appends one question (with its subquestions, answers, attributes and default values) to the rows; returns its qid. */
 function addQuestionRows(rows: QuestionRows, ids: IdCounters, question: NormalQuestion, place: QuestionPlace): number {
   const { sid, gid, languages, ranking } = place;
@@ -160,32 +169,42 @@ function addQuestionRows(rows: QuestionRows, ids: IdCounters, question: NormalQu
     }
   };
 
+  // The types 1, : and ; name their base theme (research-gen-types.md, Konsequenz 6; LimeSurvey fills an empty name
+  // with it as well, Question.php:1544-1570). The version 1 types keep the empty column of the Python generator (parity).
+  const theme = question.question_theme_name !== "" || !TWO_SCALE_TYPES.has(question.type)
+    ? question.question_theme_name
+    : (BASE_THEME_BY_TYPE[question.type] ?? "");
   const qid = ids.qid;
   ids.qid += 1;
   rows.questions.push({
     qid, parent_qid: 0, sid, gid, type: question.type, title: question.code, preg: question.preg, other: yn(question.other),
     mandatory: mandatoryFlag(question.mandatory), question_order: place.questionOrder, scale_id: 0,
     same_default: question.same_default ? 1 : 0, relevance: question.relevance, encrypted: yn(question.encrypted),
-    question_theme_name: question.question_theme_name, same_script: question.same_script ? 1 : 0,
+    question_theme_name: theme, same_script: question.same_script ? 1 : 0,
     modulename: question.modulename,
   });
   addQuestionL10n(qid, question.text, question.help, question.script);
   addDefault(qid, 0, "", question.default);
   addDefault(qid, 0, "other", question.default_other);
 
-  question.subquestions.forEach((sub, subOrder) => {
+  // question_order and sortorder count from 0 within each scale, in the order of the spec (LimeSurvey orders the items
+  // by scale and then by order: getSubQuestions, common_helper.php:3782-3809).
+  const subOrders = new Map<number, number>();
+  question.subquestions.forEach((sub) => {
     const subQid = ids.qid;
     ids.qid += 1;
     rows.subquestions.push({
       qid: subQid, parent_qid: qid, sid, gid, type: question.type, title: sub.code, preg: "", other: "N",
-      mandatory: "", question_order: subOrder, scale_id: 0, same_default: 0, relevance: sub.relevance, encrypted: "N",
-      question_theme_name: "", same_script: 0, modulename: "",
+      mandatory: "", question_order: nextOrder(subOrders, sub.scale_id), scale_id: sub.scale_id, same_default: 0,
+      relevance: sub.relevance, encrypted: "N", question_theme_name: "", same_script: 0, modulename: "",
     });
     addQuestionL10n(subQid, sub.text, {}, {});
     addDefault(qid, subQid, "", sub.default);
   });
 
-  question.answers.forEach((answer, sortOrder) => {
+  const answerOrders = new Map<number, number>();
+  question.answers.forEach((answer) => {
+    const sortOrder = nextOrder(answerOrders, answer.scale_id);
     if (ranking === "subquestions" && question.type === "R") {
       // LimeSurvey 7 keeps the entries of a Ranking question as subquestions of type R.
       const entryQid = ids.qid;
@@ -201,7 +220,7 @@ function addQuestionRows(rows: QuestionRows, ids: IdCounters, question: NormalQu
     const aid = ids.aid;
     ids.aid += 1;
     rows.answers.push({
-      aid, qid, code: answer.code, sortorder: sortOrder, assessment_value: answer.assessment_value, scale_id: 0,
+      aid, qid, code: answer.code, sortorder: sortOrder, assessment_value: answer.assessment_value, scale_id: answer.scale_id,
     });
     for (const language of languages) {
       rows.answerL10ns.push({ id: ids.al10n, aid, answer: textIn(answer.text, language), language });

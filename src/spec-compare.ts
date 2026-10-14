@@ -87,7 +87,11 @@ export interface ComparableSpec {
   groups: ComparableGroup[];
 }
 
-export type SpecDifference = { path: string; expected: JsonValue; actual: JsonValue };
+/**
+ * One difference. Below a subquestion or answer it also names the code of the entry and, when the entry is on scale 1,
+ * its scale_id, so that the entry is clear without its index (the same code may stand on both scales).
+ */
+export type SpecDifference = { path: string; expected: JsonValue; actual: JsonValue; code?: string; scale_id?: number };
 
 /** CRLF (and a lone CR, which an XML parser also turns into LF) to LF, trimmed when asked, then the safe entity decoding. */
 function clean(value: string, trim: boolean): string {
@@ -196,6 +200,16 @@ function normalizeDefault(value: unknown, languages: readonly string[], sameDefa
   return (entries.find(([language]) => language === base) ?? entries[0])?.[1];
 }
 
+/**
+ * Subquestions or answers ordered by scale, stable within a scale (scale 0 before 1, then the order of the spec). LimeSurvey
+ * orders them the same way: subquestions by (scale_id, question_order), common_helper.php:3795; answers by scale and
+ * sortorder per scale (the generator numbers each scale from 0). So a spec that lists a scale-1 entry first compares equal
+ * with the survey it creates.
+ */
+function byScale<T extends { scale_id?: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => (a.scale_id ?? 0) - (b.scale_id ?? 0));
+}
+
 function normalizeQuestionForCompare(question: Record<string, unknown>, languages: readonly string[], cleaner: Cleaning): ComparableQuestion {
   const type = asString(question.type);
   const base = baseTheme(type);
@@ -225,7 +239,7 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
     relevance: cleanText(question.relevance) || "1",
     other: truthy(question.other),
     attributes: normalizeAttributes(question.attributes, extendedTheme || base, languages, cleaner),
-    subquestions: records(question.subquestions).map((item) => {
+    subquestions: byScale(records(question.subquestions).map((item) => {
       const subDefault = normalizeDefault(item.default, languages, sameDefault, cleaner);
       return {
         code: cleanText(item.code),
@@ -234,14 +248,14 @@ function normalizeQuestionForCompare(question: Record<string, unknown>, language
         ...relevanceOf(item),
         ...(subDefault !== undefined ? { default: subDefault } : {}),
       };
-    }),
-    answers: records(question.answers).map((item) => ({
+    })),
+    answers: byScale(records(question.answers).map((item) => ({
       code: cleanText(item.code),
       text: textMap(item.text, languages, cleaner.text),
       assessment_value: integer(item.assessment_value),
       ...scale(item),
       ...relevanceOf(item),
-    })),
+    }))),
     ...(extendedTheme !== "" ? { question_theme_name: extendedTheme } : {}),
     ...(preg !== "" ? { preg } : {}),
     ...(truthy(question.encrypted) ? { encrypted: true as const } : {}),
@@ -337,19 +351,25 @@ function diffItems<T extends { code: string; scale_id?: number }>(
   describe: (item: T) => unknown = (item) => item,
 ): void {
   const keyOf = (item: T): string => `${item.scale_id ?? 0}:${item.code}`;
+  const entryOf = (item: T): { code: string; scale_id?: number } => ({
+    code: item.code,
+    ...(item.scale_id !== undefined && item.scale_id !== 0 ? { scale_id: item.scale_id } : {}),
+  });
   const actualIndex = new Map(actual.map((item, index) => [keyOf(item), index] as const));
   const matched = new Set<number>();
   expected.forEach((item, index) => {
     const found = actualIndex.get(keyOf(item));
     if (found === undefined) {
-      out.push({ path: `${path}[${index}]`, expected: json(describe(item)), actual: null });
+      out.push({ path: `${path}[${index}]`, expected: json(describe(item)), actual: null, ...entryOf(item) });
       return;
     }
     matched.add(found);
-    diffValue(`${path}[${index}]`, item, actual[found], out);
+    const own: SpecDifference[] = [];
+    diffValue(`${path}[${index}]`, item, actual[found], own);
+    out.push(...own.map((difference) => ({ ...difference, ...entryOf(item) })));
   });
   actual.forEach((item, index) => {
-    if (!matched.has(index)) out.push({ path: `${path}[${index}]`, expected: null, actual: json(describe(item)) });
+    if (!matched.has(index)) out.push({ path: `${path}[${index}]`, expected: null, actual: json(describe(item)), ...entryOf(item) });
   });
   const commonExpected = expected.filter((item) => actualIndex.has(keyOf(item))).map(keyOf);
   const commonActual = actual.filter((_item, index) => matched.has(index)).map(keyOf);

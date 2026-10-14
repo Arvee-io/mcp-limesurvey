@@ -35,9 +35,11 @@ const specSchema = z.looseObject({
   description: z.unknown().optional().describe("Kind group: group description, a string or a map per language."),
   relevance: z.unknown().optional().describe("Kind group or question: ExpressionScript relevance, default 1."),
   randomization_group: z.unknown().optional().describe("Kind group: name of the randomization group."),
-  questions: z.unknown().optional().describe("Kind group: list of questions."),
+  questions: z.unknown().optional().describe(
+    "Kind group: list of questions, each a question spec (code, type, text, subquestions and answers with an optional scale_id, ...).",
+  ),
   code: z.unknown().optional().describe("Kind question: question code, a letter first, then letters or digits, at most 20."),
-  type: z.unknown().optional().describe("Kind question: question type code, one of X L ! O M Y N S T Q 5 F A R K B C E H P D G U I * |."),
+  type: z.unknown().optional().describe("Kind question: question type code, one of X L ! O M Y N S T Q 5 F A R K B C E H P D G U I * | 1 : ;."),
   text: z.unknown().optional().describe("Kind question: question text (required), a string or a map per language."),
   help: z.unknown().optional().describe("Kind question: help text, a string or a map per language."),
   script: z.unknown().optional().describe("Kind question: JavaScript of the question, a string or a map per language."),
@@ -48,9 +50,13 @@ const specSchema = z.looseObject({
     + "placeholder, ...) also take a map per language.",
   ),
   subquestions: z.unknown().optional().describe(
-    "Kind question: list of { code, text, relevance, default } (rows, or the options of M and P).",
+    "Kind question: list of { code, text, scale_id, relevance, default } (rows, or the options of M and P). scale_id is 0 "
+    + "(default) or 1: the types : and ; have their rows on scale 0 and their columns on scale 1, each scale with its own codes.",
   ),
-  answers: z.unknown().optional().describe("Kind question: list of { code (1-5 letters or digits), text, assessment_value }."),
+  answers: z.unknown().optional().describe(
+    "Kind question: list of { code (1-5 letters or digits), text, assessment_value, scale_id }. scale_id is 0 (default) or, "
+    + "for the second answer scale of type 1, 1; codes are unique per scale.",
+  ),
   default: z.unknown().optional().describe(
     "Kind question: default value of a question without subquestions, a string or a map per language (it may name only some languages).",
   ),
@@ -145,9 +151,11 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "the version of the instance decides. Without "
         + "survey_id nothing is sent to LimeSurvey and skipped_checks lists the checks that need the survey (for kind "
         + "survey the languages come from the spec itself); with survey_id the tool reads the survey (read methods only) "
-        + "and also reports question codes that already exist in it and holds language maps to its languages. In this "
-        + "version the question types 1, : and ; are reported as not supported yet. The tool does not create or change "
-        + "anything; limesurvey_create_survey_from_spec creates a survey from a valid survey spec and "
+        + "and also reports question codes that already exist in it and holds language maps to its languages. The types "
+        + "with a second scale are checked with their scale_id: type 1 needs subquestions (scale 0) and answers on scale 0 "
+        + "and 1, the types : and ; need subquestions on scale 0 (rows) and 1 (columns) and take no answers; codes are "
+        + "unique per scale; scale_id 1 elsewhere and default values on these three types are errors. The tool does not "
+        + "create or change anything; limesurvey_create_survey_from_spec creates a survey from a valid survey spec and "
         + "limesurvey_get_survey_spec reads a survey, group or question as a spec.",
       inputSchema: strictInput({
         spec: specSchema,
@@ -213,7 +221,8 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "spec becomes a LimeSurvey structure file (.lss) that import_survey imports; the new survey stays inactive and is "
         + "not activated. The tool then reads the survey back (read methods only) and compares it with the spec. Returns "
         + "{ survey_id, title, languages, groups, questions, active, verification { ok, differences [{ path, expected, "
-        + "actual }], differences_total, truncated }, truncated }, plus warnings, missing_translations and unreadable "
+        + "actual, and for a subquestion or answer its code and, on scale 1, scale_id }], differences_total, truncated }, "
+        + "truncated }, plus warnings, missing_translations and unreadable "
         + "(each with a _total) when there are any. A list shows at most 200 entries and is cut further to stay within "
         + "LIMESURVEY_MAX_RESPONSE_CHARS; the _total fields hold the full numbers and truncated says whether a list was "
         + "cut. A difference is a finding of the comparison, not an error of the call. If LimeSurvey answers the import "
@@ -227,7 +236,8 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "A text is one string (for every language) or a map per language. A spec with a Ranking question makes the tool "
         + "read the generation of the instance once (get_group_properties for group 0): on LimeSurvey 7 the entries are "
         + "written as subquestions of type R (code up to 20 characters, with relevance), on LimeSurvey 6 as answers (code up "
-        + "to 5 characters, no relevance). The question types 1, : and ; are not supported yet. Needs the write scope content.",
+        + "to 5 characters, no relevance). The second scale of the types 1 (answers) and : and ; (subquestions, the "
+        + "columns) is given with scale_id 1. Needs the write scope content.",
       inputSchema: strictInput({ spec: specSchema }),
       outputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -362,7 +372,9 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "unreadable [{ code, detail }], missing_translations [{ path, language }] }. spec has the format of "
         + "limesurvey_create_survey_from_spec: level survey { survey, groups }, level group one group, level question one "
         + "question; every text is a map per language, line breaks are \\n and HTML entities are decoded except the "
-        + "markup characters; attribute values equal to the default of the question theme are left out. spec holds no "
+        + "markup characters; attribute values equal to the default of the question theme are left out; subquestions and "
+        + "answers come ordered by scale, and scale_id appears only for scale 1 (the columns of : and ;, the second answer "
+        + "scale of 1). spec holds no "
         + "IDs: ids lists them by path (level survey: groups [{ path, group_id }] and questions [{ path, code, "
         + "question_id }]; level group: group_id and questions; level question: question_id and group_id) and position "
         + "gives the 1-based place of a group in the survey or of a question in its group. fingerprint is the SHA-256 of "
@@ -520,8 +532,7 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "itself is unknown (lost answer, an error after the creation), nothing is deleted: created is \"unknown\" and "
         + "candidates and cleanup_hint say what to check. An active survey is refused. A whole "
         + "group goes with limesurvey_add_group_from_spec. A Ranking question makes the tool read the LimeSurvey generation "
-        + "once (entries as subquestions on 7, as answers on 6). The question types 1, : and ; are not supported yet. Needs "
-        + "the write scope content.",
+        + "once (entries as subquestions on 7, as answers on 6). Needs the write scope content.",
       inputSchema: strictInput({
         survey_id: surveyId,
         group_id: z.number().int().positive().describe("ID of the group of this survey that gets the question."),
@@ -570,8 +581,7 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "import itself is unknown (lost answer, an unexpected answer), nothing is deleted: created is \"unknown\" and "
         + "candidates and cleanup_hint say what to check. The .lsg import fills no translation gaps. An active survey is refused. A "
         + "single question goes with limesurvey_add_question_from_spec. A Ranking question makes the tool read the "
-        + "LimeSurvey generation once (entries as subquestions on 7, as answers on 6). The question types 1, : and ; are not "
-        + "supported yet. Needs the write scope content.",
+        + "LimeSurvey generation once (entries as subquestions on 7, as answers on 6). Needs the write scope content.",
       inputSchema: strictInput({
         survey_id: surveyId,
         group: groupSpecSchema,
@@ -612,7 +622,8 @@ export function registerSpecTools(server: McpServer, client: LimeSurveyClient, c
         + "the new one is deleted again and the old one keeps everything. Texts the end state does not change are written "
         + "back as LimeSurvey stores them. dry_run true only reads (write scope none) and returns { survey_id, question_id, "
         + "survey_active, mode (none, texts, columns, replace, or rejected when an active survey would need more than "
-        + "texts), changes [{ path, kind (text, column, structure), current, desired }], changes_total, risks [{ code, "
+        + "texts), changes [{ path, kind (text, column, structure), current, desired, and for a subquestion or answer its "
+        + "code and, on scale 1, scale_id }], changes_total, risks [{ code, "
         + "blocking, acknowledgeable, detail, locations }], plan, fingerprint }. The real run needs expected_fingerprint "
         + "(of get_survey_spec or the dry run; STALE_SPEC if the question changed since) and confirm_destructive_action "
         + "true, and returns the same plus applied, verification { ok, differences } and, after a replacement, the new "

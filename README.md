@@ -447,10 +447,16 @@ path, which keeps them usable from remote MCP clients.
 }
 ```
 
-- Question types: `X L ! O M Y N S T Q 5 F A R K B C E H P D G U I * |`.
+- Question types: all 29 core types, `X L ! O M Y N S T Q 5 F A R K B C E H P D G U I * | 1 : ;`.
   `M Q A K B C E P` need subquestions and no answers; `L ! O R` need answers and no
-  subquestions; `F H` need both; all others need neither. `other` is allowed for
+  subquestions; `F H` need both; `1 : ;` see the next point; all others need neither. `other` is allowed for
   `L ! M P` only.
+- Arrays with two scales: `scale_id` (0 or 1) marks the second scale. Type `1`
+  (array dual scale) takes subquestions on scale 0 and answers on scale 0 and 1;
+  types `:` (array numbers) and `;` (array texts) take subquestions on scale 0 (rows)
+  and 1 (columns) and no answers. Codes must be unique per scale, so the same code
+  may appear on both scales. `get_survey_spec` writes `scale_id` only for scale 1 and
+  sorts entries by scale.
 - Codes: question codes `^[A-Za-z][A-Za-z0-9]*$` (at most 20 characters, unique in
   the survey without regard to case, not a reserved word such as `SID`);
   subquestion codes alphanumeric (at most 20, not `time`); answer codes
@@ -478,8 +484,9 @@ path, which keeps them usable from remote MCP clients.
   subquestion `relevance` and `default`, group `randomization_group`; the survey's
   yes/no settings and `format` also take `"inherit"`/`"I"`.
 - `default` is allowed on question types without subquestions except `R` and `|`,
-  subquestion `default` on types with subquestions, and `default_other` on `L` and
-  `!` with `other`; elsewhere LimeSurvey stores a default but never uses it.
+  subquestion `default` on types with subquestions except `1`, `:` and `;`, and
+  `default_other` on `L` and `!` with `other`; elsewhere LimeSurvey stores a default but
+  never uses it.
 - `mandatory` is `true`, `false`, or `"soft"`. `expires` is `YYYY-MM-DD HH:MM:SS`
   or `YYYY-MM-DD` (end of day).
 - Texts may use HTML entities; references that end with `;` and do not stand for

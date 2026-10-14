@@ -222,7 +222,8 @@ test("[GEN-E] validate_spec with kind question accepts a single valid question",
   });
 });
 
-const unsupportedTypes: Array<[string, Spec]> = [
+// GEN-TYPES: the types 1, : and ; were refused before; with their second scale they are accepted now.
+const twoScaleTypes: Array<[string, Spec]> = [
   ["1", {
     subquestions: [{ code: "SQ001", text: "Zeile" }],
     answers: [{ code: "A1", text: "Links", scale_id: 0 }, { code: "B1", text: "Rechts", scale_id: 1 }],
@@ -235,12 +236,12 @@ const unsupportedTypes: Array<[string, Spec]> = [
   }],
 ];
 
-for (const [type, extra] of unsupportedTypes) {
-  test(`[GEN-E] validate_spec rejects the type ${type} in this version, at the type path, naming the type`, async () => {
+for (const [type, extra] of twoScaleTypes) {
+  test(`[GEN-E] [GEN-TYPES] validate_spec accepts the type ${type} with its second scale`, async () => {
     await withSession(async (session) => {
       const result = await validate(session, surveyWith([question("Q01", { type, ...extra })]));
-      const finding = errorAt(result, `${Q0}.type`);
-      assert.ok(finding.message.includes(type), `the message does not name the type: ${finding.message}`);
+      assert.equal(result.valid, true, JSON.stringify(result.errors));
+      assert.deepEqual(result.errors, []);
     });
   });
 }

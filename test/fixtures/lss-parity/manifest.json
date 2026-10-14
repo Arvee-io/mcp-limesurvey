@@ -63,6 +63,24 @@
         "S",
         "!"
       ]
+    },
+    {
+      "spec": "p10-type-1.spec.json",
+      "types": [
+        "1"
+      ]
+    },
+    {
+      "spec": "p11-type-colon.spec.json",
+      "types": [
+        ":"
+      ]
+    },
+    {
+      "spec": "p12-type-semicolon.spec.json",
+      "types": [
+        ";"
+      ]
     }
   ]
 }
