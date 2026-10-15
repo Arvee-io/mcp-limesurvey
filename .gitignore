@@ -6,3 +6,11 @@ exports/
 themes/
 .DS_Store
 .codex/
+
+# Local working material (never public)
+input/
+prompts/
+.work/
+.claude/
+.playwright-mcp/
+CLAUDE.md
